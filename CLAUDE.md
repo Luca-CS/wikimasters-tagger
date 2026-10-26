@@ -37,7 +37,7 @@ The chain pauses on that check until the user validates it, pauses while any sit
 
 User-facing text, comments, config and output are in French, so keep that language. Python 3.11+ (`tomllib`) and vanilla JS with no build step. There are no dependencies.
 
-The code is hosted on GitHub at `Luca-CS/wikimasters-chrome-extension`, a private repo. Work on feature branches and open PRs into `main`. `input/` (the user's pasted pages and the `collection.html` DOM snapshot), `cache/` and `output/` are personal data and gitignored, so never commit them.
+The code is hosted on GitHub at `Luca-CS/wikimasters-tagger`, a public repo. Work on feature branches and open PRs into `main`. `input/` (the user's pasted pages and the `collection.html` DOM snapshot), `cache/` and `output/` are personal data and gitignored, so never commit them.
 
 ## Commands
 

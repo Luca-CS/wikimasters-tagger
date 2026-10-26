@@ -1,5 +1,7 @@
 # WikiMasters Tagger
 
+> Projet personnel, non affilié à WikiMasters.
+
 Propose des étiquettes pour ta collection WikiMasters. Deux façons de l'utiliser :
 
 - **l'extension Chrome** (recommandé) : elle lit ta collection directement sur le

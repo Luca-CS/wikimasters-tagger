@@ -12,6 +12,10 @@ Propose des étiquettes pour ta collection WikiMasters. Deux façons de l'utilis
 Avec l'extension, tu peux aussi faire poser les étiquettes suggérées dans le jeu
 (« Étiqueter toute la collection »), uniquement quand tu le lances.
 
+![Démonstration : analyse de la collection, cartes surlignées, rapport de catégorisation et page Config](docs/demo.gif)
+
+*Démo sur une fausse page Collection (36 cartes inventées), pas sur le vrai site : c'est la vraie extension qui tourne. Le panneau est montré sans lancer l'étiquetage ni la vente.*
+
 ## Extension Chrome
 
 ### Installation

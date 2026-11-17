@@ -710,10 +710,54 @@
     return now;
   }
 
-  /** Va à la page `target`, une page à la fois (le site n'a que « Précédent » et « Suivant »). */
+  /** Saisit `value` dans un champ contrôlé par React (setter natif + événement input). */
+  function typeInto(input, value) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    input.focus();
+    setter.call(input, String(value));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  function pressEnter(el) {
+    for (const type of ["keydown", "keyup"]) {
+      el.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+    }
+  }
+
+  /**
+   * Saute directement à la page `target` avec « Page X / Y » → champ « Aller à la page » →
+   * Entrée. Renvoie la page affichée, ou null si le saut n'est pas possible.
+   */
+  async function jumpToPage(job, target) {
+    await waitIdle(job);
+    const p = pageInfo();
+    if (!p.jump || target > p.total) return null;
+    p.jump.click();
+    if (!(await waitFor(job, () => !!dom.pageInput(), 3000))) {
+      if (job.abort) throw new Aborted();
+      return null;
+    }
+    await step(job);
+    const input = dom.pageInput();
+    typeInto(input, target);
+    await step(job);
+    await reloadAfter(job, () => pressEnter(dom.pageInput() || input), `Page ${target}`);
+    return pageInfo();
+  }
+
+  /**
+   * Va à la page `target` : saut direct si le site le propose, sinon une page à la fois
+   * (« Précédent » / « Suivant »).
+   */
   async function goToPage(job, target, label) {
     let p = pageInfo();
     target = Math.max(1, target); // pas de plafond : le total affiché peut être périmé
+    if (p.page !== target && Math.abs(p.page - target) > 1) {
+      ui.ptext.textContent = `${label} : page ${p.page} → ${target}`;
+      const jumped = await jumpToPage(job, target);
+      if (jumped) p = jumped;
+      if (p.page !== target) log(`saut à la page ${target} sans effet (page ${p.page}) : page par page`);
+    }
     while (p.page !== target) {
       ui.ptext.textContent = `${label} : page ${p.page} → ${target}`;
       p = await turnPage(job, target > p.page ? 1 : -1);
@@ -1026,6 +1070,11 @@
     }, 5000, `sélection incohérente (${(dom.selectionBar() || {}).count} cartes au lieu de ${sell.length}) : rien n'a été vendu.`);
     const discard = dom.barButton(dom.selectionBar(), /^Défausser \(\+\d+\)$/);
     if (!discard || discard.disabled) throw new Error("bouton « Défausser » introuvable.");
+    // Le site retire lui-même du compte les cartes verrouillées (favoris, échange en attente).
+    const offered = +dom.clean(discard.textContent).match(/\+(\d+)/)[1];
+    if (offered !== sell.length) {
+      throw new Error(`le site défausserait ${offered} cartes au lieu de ${sell.length} (carte verrouillée non reconnue ?) : rien n'a été vendu.`);
+    }
     discard.click();
     await until(job, () => !!dom.discardDialog(), 5000, "confirmation de défausse introuvable.");
     const dialog = dom.discardDialog();
@@ -1057,7 +1106,7 @@
     const rarities = RARITY_ORDER.filter((r) => (config.settings.sellRarities || []).includes(r));
     if (!rarities.length) return note("Choisis d'abord au moins une rareté.", "warn", null, 6000);
     note(`Vendre toutes tes cartes sans étiquette de rareté ${rarities.join(", ")} ? Irréversible : chaque carte est retirée ` +
-      `contre 1 wikibidou.${config.settings.sellKeep !== false ? " Favoris et cartes shiny gardés." : ""}`, "err",
+      `contre 1 wikibidou. Favoris gardés (le site les verrouille)${config.settings.sellKeep !== false ? ", cartes shiny aussi" : ""}.`, "err",
     { label: "Oui, vendre ces cartes", onclick: () => runSell() });
   }
 
@@ -1094,7 +1143,8 @@
         if (wrong) {
           throw new Error(`carte inattendue malgré les filtres : « ${wrong.title} » ${wrong.tags.length ? "a une étiquette" : `est ${wrong.rarity}`}. Rien n'a été vendu sur cette page.`);
         }
-        const kept = cards.filter((c) => (keep && (dom.isStarred(c) || c.shiny)) || dom.pendingTrade(c));
+        // Favoris et échanges en attente : verrouillés par le site, jamais défaussables.
+        const kept = cards.filter((c) => dom.isStarred(c) || dom.pendingTrade(c) || (keep && c.shiny));
         kept.forEach((c) => stats.kept.add(c.title));
         const sell = cards.filter((c) => !kept.includes(c));
         ui.ptext.textContent = `Page ${p.page} / ${p.total} · ${plural(stats.sold, "carte")} vendue${stats.sold > 1 ? "s" : ""}`;
@@ -1267,7 +1317,7 @@
               return chip;
             }))),
             h("label", { class: "toggle" },
-              h("span", {}, "Garder les favoris et les cartes shiny"),
+              h("span", { title: "Les favoris sont toujours gardés : le site les verrouille (ni défausse, ni vente, ni échange)." }, "Garder aussi les cartes shiny"),
               ref("sellKeep", h("input", { type: "checkbox", class: "switch", onchange: (e) => setSetting("sellKeep", e.target.checked) }))),
             ref("sellBtn", h("button", { class: "btn danger", onclick: askSell }, "Vendre les cartes sans étiquette…")),
             ref("sellStop", h("button", { class: "btn", hidden: true, onclick: stopSelling }, "Arrêter la vente"))),

@@ -22,7 +22,7 @@
     out.mounted = await until(() => shadow(), 10000);
     await sleep(800);
     if (location.search.includes("sell")) {
-      // Vente des SR sans étiquette (les R restent), favoris et shiny gardés, sur toutes les pages.
+      // Vente des UR sans étiquette (les R et les L restent), favoris et shiny gardés, sur toutes les pages.
       const tagsOfRoot = (root) => [...root.querySelectorAll("span.rounded-full")].map((s) => s.textContent.trim());
       const tpl = [...document.querySelectorAll("div.relative.isolate.group")];
       const byBase = new Map(tpl.map((r) => [r.querySelector("h3").textContent.trim(), r]));
@@ -30,13 +30,13 @@
       const protectedTitle = (t) => {
         const r = byBase.get(base(t));
         // La 1re carte est rendue shiny par le simulateur (sur sa copie, pas sur cette page).
-        return !!r.querySelector('button[aria-label="Retirer des favoris"]') || r === tpl[0];
+        return !!r.querySelector('button[aria-label^="Retirer des favoris"]') || r === tpl[0];
       };
-      const eligible = window.__inventory.filter((it) => it.rarity === "SR" && !tagsOfRoot(byBase.get(base(it.title))).length);
+      const eligible = window.__inventory.filter((it) => it.rarity === "UR" && !tagsOfRoot(byBase.get(base(it.title))).length);
       out.expected = eligible.filter((it) => !protectedTitle(it.title)).map((it) => it.title).sort();
       out.protectedCount = eligible.length - out.expected.length;
       const chip = (r) => [...shadow().querySelectorAll(".rchip")].find((c) => c.textContent === r);
-      chip("SR").click();
+      chip("UR").click();
       await sleep(400);
       out.chipsOn = [...shadow().querySelectorAll(".rchip.on")].map((c) => c.textContent);
       btn(/^Vendre les cartes sans étiquette/).click();
@@ -67,6 +67,9 @@
       out.stopped = await until(() => /Étiquetage arrêté/.test(shadow().querySelector(".note").textContent), 30000);
       await sleep(500);
       out.resumeLabel = btn(/^(Reprendre|Étiqueter toute)/).textContent;
+      // Tu es allé voir la page 4 entre-temps : la reprise doit sauter directement à la page 2.
+      window.__showPage(4);
+      await sleep(400);
       const navBefore = { ...window.__nav };
       btn(/^Reprendre l'étiquetage/).click();
       out.finished = await until(() => {
@@ -75,7 +78,7 @@
         return stop && stop.hidden && note && !note.hidden && /posée/.test(note.textContent);
       }, 140000);
       out.seconds = Math.round((Date.now() - t0) / 1000);
-      out.resumeNav = { prev: window.__nav.prev - navBefore.prev, next: window.__nav.next - navBefore.next };
+      out.resumeNav = { prev: window.__nav.prev - navBefore.prev, next: window.__nav.next - navBefore.next, jump: window.__nav.jump - navBefore.jump };
       out.labelAfter = btn(/^(Reprendre|Étiqueter toute)/).textContent;
       out.reloads = window.__reloads;
       out.note = shadow().querySelector(".note").textContent;

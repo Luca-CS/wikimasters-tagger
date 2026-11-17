@@ -1,8 +1,22 @@
-// Page Collection de test (snapshot input/…, scripts du site retirés).
+// Page Collection de test (snapshot input/…, scripts du site retirés), comme le site de
+// novembre 2026 :
 // - config de test : pagination rapide, couleur de Maths faussée (doit être reprise du jeu) ;
-// - fausse pagination : 4 pages, départ en page 2 comme dans le snapshot ; les pages 1, 3 et 4
-//   reprennent les cartes du snapshot avec un titre suffixé.
+// - fausse pagination : 4 pages, départ en page 2 ; les pages 1, 3 et 4 reprennent les cartes
+//   du snapshot avec un titre suffixé ; « Page X / Y » est un bouton qui ouvre un champ
+//   « Aller à la page » (Entrée ou perte du focus = saut, Échap = annuler) ;
+// - favoris verrouillés : étoile masquée et mention « Verrouillée (favori) » en mode sélection,
+//   jamais comptés dans « Défausser (+N) » ni défaussés.
 (function () {
+  // Le snapshot peut contenir le panneau et les surlignages de l'extension (export fait avec
+  // l'extension active) : on repart d'une page vierge.
+  const stale = document.getElementById("wmt-host");
+  if (stale) stale.remove();
+  document.querySelectorAll(".wmt-flags").forEach((n) => n.remove());
+  document.querySelectorAll("[data-wmt], [data-wmt-ring]").forEach((n) => {
+    n.removeAttribute("data-wmt");
+    n.removeAttribute("data-wmt-ring");
+  });
+
   const c = WMT.defaults.config();
   c.settings.pageDelay = 300;
   c.rules.find((r) => r.name === "Maths").color = "#000000";
@@ -11,8 +25,30 @@
   const PAGES = 4;
   let page = 2;
   const roots = [...document.querySelectorAll("div.relative.isolate.group")];
+  // Contenu de test : le balisage reste celui du snapshot, mais les cartes sans étiquette
+  // reçoivent des descriptions qui déclenchent les règles (une sur quatre reste neutre), et une
+  // étiquette du jeu devient « Maths » (couleur à reprendre du jeu).
+  // Trois étiquettes du jeu par page (Maths, Musique, Mythologie), plus Ski et Shiny absentes
+  // du jeu : le scénario d'étiquetage reste sous les 2 min.
+  const DESCS = [
+    "théorème de géométrie euclidienne sur les triangles rectangles", "compositeur et pianiste allemand", null,
+    "dieu du ciel et de la foudre dans la mythologie grecque", "skieur alpin français", null,
+  ];
+  const chipsOf = (root) => [...root.querySelectorAll("span.rounded-full")].filter((s) => /background-color/.test(s.getAttribute("style") || ""));
+  let k = 0;
+  for (const r of roots) {
+    if (chipsOf(r).length) continue;
+    const d = DESCS[k++ % DESCS.length];
+    const p = r.querySelector("p");
+    if (d && p) p.textContent = d;
+  }
+  const mathsChip = roots.flatMap(chipsOf).find((s) => s.textContent.trim() === "Finance");
+  if (mathsChip) mathsChip.textContent = "Maths";
   const grid = roots[0].parentElement;
   const template = roots.map((r) => r.cloneNode(true));
+  const STAR = 'button[aria-label^="Retirer des favoris"]';
+  const starredT = new Set(template.map((r, t) => (r.querySelector(STAR) ? t : -1)).filter((t) => t >= 0));
+  window.__starredCount = starredT.size;
   const rarityLeaf = (root) => [...root.querySelectorAll("div, span")].find((e) => e.childElementCount === 0 && /^(L|UR|SR|R|PC|C)$/.test(e.textContent.trim()));
   const shiny = location.search.includes("autotag") || location.search.includes("sell");
   if (shiny) {
@@ -23,7 +59,7 @@
     badge.innerHTML = `${badge.textContent.trim()}<span aria-hidden="true">✦</span><span class="sr-only"> shiny</span>`;
   }
   if (location.search.includes("sell")) {
-    // Le snapshot n'a que des SR : une carte sur 5 devient R, que la vente des SR doit épargner.
+    // Une carte sur 5 devient R, que la vente des UR doit épargner.
     template.forEach((r, i) => {
       if (i % 5 === 4) rarityLeaf(r).textContent = "R";
     });
@@ -35,21 +71,78 @@
     template.forEach((r, t) => {
       const base = r.querySelector("h3").textContent.trim();
       const badge = r.querySelector(".shiny-badge") || rarityLeaf(r);
-      inventory.push({ t, title: p === 2 ? base : `${base} ·${p}`, rarity: badge ? badge.firstChild.textContent.trim() : "" });
+      inventory.push({ t, title: p === 2 ? base : `${base} ·${p}`, rarity: badge ? badge.firstChild.textContent.trim() : "", starred: starredT.has(t) });
     });
   }
   window.__inventory = inventory;
   const filters = { untagged: false, rarities: new Set() };
   window.__filters = filters;
   window.__sold = [];
-  const pagerTexts = [...document.querySelectorAll("main span")].filter((s) =>
-    /^Page\s+\d+\s*\/\s*\d+$/.test(s.textContent.replace(/\s+/g, " ").trim()));
-  const buttons = pagerTexts.flatMap((s) => [...s.parentElement.querySelectorAll("button")]);
+
+  // --- Pagination : [« ← Précédent », bouton « Page X / Y », « Suivant → »] ----------------
+  const bars = [...document.querySelectorAll('main button[title="Aller à la page…"]')].map((b) => b.parentElement);
+  const navButtons = bars.flatMap((bar) => [...bar.querySelectorAll("button")].filter((b) => /Précédent|Suivant/.test(b.textContent)));
   let total = PAGES;
+  window.__nav = { next: 0, prev: 0, jump: 0 };
+
+  function middle(bar, node) {
+    const [prev, , next] = [...bar.children];
+    bar.replaceChildren(prev, node, next);
+  }
+
+  function jumpButton(bar) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.title = "Aller à la page…";
+    b.className = "text-sm tabular-nums cursor-pointer underline decoration-dotted";
+    b.textContent = `Page ${page} / ${total}`;
+    b.addEventListener("click", () => openJump(bar));
+    return b;
+  }
+
+  function openJump(bar) {
+    const span = document.createElement("span");
+    span.className = "inline-flex items-center gap-1 text-sm";
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "1";
+    input.max = String(total);
+    input.setAttribute("aria-label", "Aller à la page");
+    input.value = String(page);
+    let done = false;
+    const commit = () => {
+      if (done) return;
+      done = true;
+      const n = Number(input.value);
+      setPager();
+      if (!Number.isInteger(n)) return;
+      const t = Math.min(Math.max(1, n), total);
+      if (t === page) return;
+      window.__nav.jump++;
+      page = t;
+      reload();
+    };
+    // Comme le site : value contrôlée, Entrée ou perte du focus = saut, Échap = annuler.
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") commit();
+      if (e.key === "Escape") {
+        done = true;
+        setPager();
+      }
+    });
+    input.addEventListener("blur", commit);
+    span.append("Page ", input, `/ ${total}`);
+    middle(bar, span);
+    setTimeout(() => input.focus(), 0);
+  }
+
   function setPager() {
     // Comme le site : pas de pagination quand il n'y a qu'une page.
-    pagerTexts.forEach((s) => (s.textContent = total > 1 ? `Page ${page} / ${total}` : ""));
-    buttons.forEach((b) => (b.disabled = /Précédent/.test(b.textContent) ? page === 1 : page === total));
+    bars.forEach((bar) => {
+      bar.style.display = total > 1 ? "" : "none";
+      middle(bar, total > 1 ? jumpButton(bar) : document.createElement("span"));
+    });
+    navButtons.forEach((b) => (b.disabled = /Précédent/.test(b.textContent) ? page === 1 : page === total));
   }
 
   // --- Rechargements, comme sur le site (relevés le 07/10/2026) -------------------------
@@ -71,15 +164,13 @@
     grid.classList.toggle("opacity-40", on);
     grid.classList.toggle("pointer-events-none", on);
     if (on) {
-      pagerTexts.forEach((s) => {
-        s.textContent = "Chargement…";
-        const spin = document.createElement("span");
-        spin.className = "sim-spin animate-spin";
-        s.before(spin);
+      bars.forEach((bar) => {
+        const s = document.createElement("span");
+        s.className = "inline-flex items-center gap-2 text-sm";
+        s.innerHTML = '<span class="w-4 h-4 rounded-full animate-spin"></span>Chargement…';
+        middle(bar, s);
       });
-      buttons.forEach((b) => (b.disabled = true));
-    } else {
-      document.querySelectorAll(".sim-spin").forEach((s) => s.remove());
+      navButtons.forEach((b) => (b.disabled = true));
     }
     renderBar();
   }
@@ -108,6 +199,7 @@
   const added = new Map(); // titre -> Set des étiquettes posées pendant le test
   const titleOf = (root) => root.querySelector("h3").textContent.trim();
   const tagsOf = (root) => [...root.querySelectorAll("span.rounded-full")].map((s) => s.textContent.trim());
+  const itemOf = (title) => inventory.find((it) => it.title === title);
 
   function addChips(root) {
     const tags = added.get(titleOf(root));
@@ -129,6 +221,21 @@
     }
   }
 
+  /** Mode sélection : étoile masquée, « Verrouillée (favori) » sur les favoris (comme le site). */
+  function decorate(root) {
+    const it = itemOf(titleOf(root));
+    const star = root.querySelector(STAR) || root.querySelector('button[aria-label^="Ajouter aux favoris"]');
+    if (star) star.hidden = selecting;
+    root.querySelectorAll("[data-sim-lock]").forEach((n) => n.remove());
+    if (selecting && it && it.starred) {
+      const lock = document.createElement("span");
+      lock.dataset.simLock = "";
+      lock.className = "truncate flex items-center gap-0.5";
+      lock.innerHTML = '<svg aria-hidden="true"></svg>Verrouillée (favori)';
+      root.querySelector("h3").parentElement.append(lock);
+    }
+  }
+
   const selBtn = [...document.querySelectorAll("main button")].find((b) => b.textContent.trim().endsWith("lectionner"));
   let selecting = false;
   const selected = new Set();
@@ -139,6 +246,7 @@
     const toast = document.getElementById("sim-toast");
     if (selecting && toast) toast.remove();
     selBtn.lastChild.textContent = selecting ? "Quitter la sélection" : "Sélectionner";
+    [...grid.children].forEach(decorate);
     renderBar();
   }, 120));
   grid.addEventListener("click", (e) => {
@@ -148,6 +256,13 @@
     selected.has(t) ? selected.delete(t) : selected.add(t);
     renderBar();
   });
+
+  /** Cartes sélectionnées affichées, et celles que le site défausserait (hors favoris). */
+  function selection() {
+    const shown = new Set([...grid.children].map(titleOf));
+    const all = [...selected].filter((t) => shown.has(t));
+    return { all, discardable: all.filter((t) => !(itemOf(t) || {}).starred) };
+  }
 
   function renderBar() {
     if (!selecting) {
@@ -160,15 +275,15 @@
       bar.className = "fixed bottom-4 z-[80] flex flex-col";
       document.body.append(bar);
     }
-    const shown = new Set([...grid.children].map(titleOf));
-    const n = [...selected].filter((t) => shown.has(t)).length;
+    const { all, discardable } = selection();
+    const n = all.length;
     const off = !n || loading ? " disabled" : "";
     bar.innerHTML = (loading ? "<div><span>Actualisation…</span></div>"
       : `<div><span>${n}</span><span>${n > 1 ? "cartes sélectionnées" : "carte sélectionnée"}</span></div>`) +
       `<div><button type="button"${loading ? " disabled" : ""}>Tout sélectionner (page)</button><button type="button"${off}>Étiqueter</button>` +
-      `<button type="button" disabled>Retirer l'étiquette</button><button type="button"${off}>Défausser (+${n})</button></div>`;
-    const [all, tag, , discard] = bar.querySelectorAll("button");
-    all.addEventListener("click", () => {
+      `<button type="button" disabled>Retirer l'étiquette</button><button type="button"${!discardable.length || loading ? " disabled" : ""}>Défausser (+${discardable.length})</button></div>`;
+    const [allBtn, tag, , discard] = bar.querySelectorAll("button");
+    allBtn.addEventListener("click", () => {
       for (const root of grid.children) selected.add(titleOf(root));
       renderBar();
     });
@@ -242,6 +357,7 @@
       const n = template[it.t].cloneNode(true);
       n.querySelector("h3").textContent = it.title;
       addChips(n);
+      decorate(n);
       return n;
     }));
     if (empty) empty.remove();
@@ -293,8 +409,10 @@
   }
 
   // --- Défausse : confirmation du site, puis cartes retirées et liste rechargée ----------
+  // Comme le site : les favoris sélectionnés ne sont ni comptés ni défaussés.
   function openDiscard() {
-    const n = selected.size;
+    const { discardable } = selection();
+    const n = discardable.length;
     const d = document.createElement("div");
     d.className = "fixed inset-0 z-[90] flex items-center justify-center";
     d.innerHTML = `<div class="card-frame"><h3>Défausser ${n} carte${n > 1 ? "s" : ""} ?</h3>` +
@@ -305,7 +423,7 @@
     const [cancel, confirm] = d.querySelectorAll("button");
     cancel.addEventListener("click", () => d.remove());
     confirm.addEventListener("click", () => setTimeout(() => {
-      const titles = [...selected];
+      const titles = selection().discardable;
       for (const t of titles) inventory.splice(inventory.findIndex((it) => it.title === t), 1);
       window.__sold.push({ page, titles });
       d.remove();
@@ -328,13 +446,13 @@
     page = n;
     render();
   };
-  window.__nav = { next: 0, prev: 0 };
-  buttons.forEach((b) => b.addEventListener("click", () => {
+  navButtons.forEach((b) => b.addEventListener("click", () => {
     window.__clicks = (window.__clicks || 0) + 1;
     const forward = /Suivant/.test(b.textContent);
     window.__nav[forward ? "next" : "prev"]++;
     page += forward ? 1 : -1;
     reload();
   }));
-  setPager();
+  // Le snapshot montre la page 1 : on affiche la page 2 de l'inventaire comme point de départ.
+  render();
 })();

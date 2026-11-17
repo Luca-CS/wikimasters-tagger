@@ -66,7 +66,8 @@ recharge la page WikiMasters.
    confirme. L'extension règle les filtres du site (« Sans étiquette » + ces
    raretés), puis sélectionne chaque page avec « Tout sélectionner (page) » et
    la défausse (1 wikibidou par carte), jusqu'à la dernière page. C'est
-   **irréversible**. Les favoris et les cartes shiny sont gardés (réglable), et
+   **irréversible**. Les favoris sont toujours gardés (le jeu les verrouille),
+   les cartes shiny aussi (réglable), et
    avant chaque vente elle vérifie que chaque carte affichée est bien sans
    étiquette et de la bonne rareté, sinon elle s'arrête sans rien vendre. Les
    filtres sont remis à zéro à la fin.

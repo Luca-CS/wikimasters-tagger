@@ -36,7 +36,19 @@ BROWSERS = [
     "/usr/bin/google-chrome",
     "/usr/bin/chromium",
 ]
-BASE_ARGS = ["--headless=new", "--disable-gpu", "--no-first-run", "--window-size=1300,950"]
+BASE_ARGS = ["--headless=new", "--disable-gpu", "--no-first-run"]
+DEFAULT_SIZE = "1300x950"
+# Formats de fenêtre rejoués par les scénarios « nom@LxH[xZOOM] » : écran partagé (moitié
+# d'un écran 1600 px), portable 1280×720 avec zoom Windows à 125 %, grand écran zoomé à 150 %.
+FORMATS = ["800x900", "1280x720x1.25", "1920x1080x1.5"]
+
+
+def window_args(spec: str) -> list[str]:
+    w, h, *zoom = spec.split("x")
+    args = [f"--window-size={w},{h}"]
+    if zoom:
+        args.append(f"--force-device-scale-factor={zoom[0]}")
+    return args
 
 
 def free_port() -> int:
@@ -55,6 +67,9 @@ class Server(http.server.ThreadingHTTPServer):
     # (images, CSS, scripts) et Windows refusait parfois une connexion, d'où un script de
     # l'extension manquant au hasard (WMT.dom indéfini) et des scénarios instables.
     request_queue_size = 256
+
+    def handle_error(self, request, client_address):
+        pass  # connexions coupées par le navigateur (images du site absentes) : sans intérêt
 
 
 @contextlib.contextmanager
@@ -75,11 +90,11 @@ def browser_path() -> str:
     sys.exit("Ni Edge ni Chrome trouvé : renseigne WMT_BROWSER.")
 
 
-def cdp(browser, url, mode, extra=()) -> dict:
+def cdp(browser, url, mode, extra=(), size=DEFAULT_SIZE) -> dict:
     """Lance le navigateur avec le débogage distant et laisse cdp.mjs piloter la page."""
     port = free_port()
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as profile:
-        proc = subprocess.Popen([browser, *BASE_ARGS, f"--remote-debugging-port={port}",
+        proc = subprocess.Popen([browser, *BASE_ARGS, *window_args(size), f"--remote-debugging-port={port}",
                                  f"--user-data-dir={profile}", *extra, "about:blank"],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
@@ -135,7 +150,7 @@ SCENARIOS = [
     ("collection-autotag", "page", "/collection/?autotag", None, lambda o: [
         ("arrêt pendant la page 2, puis « Reprendre l'étiquetage (page 2 / 4) »", o.get("stopped") is True
             and o.get("resumeLabel") == "Reprendre l'étiquetage (page 2 / 4)"),
-        ("reprise sans revenir en arrière (2 pages en avant)", o.get("resumeNav") == {"prev": 0, "next": 2}),
+        ("reprise : saut direct de la page 4 à la page 2, puis 2 pages en avant", o.get("resumeNav") == {"prev": 0, "next": 2, "jump": 1}),
         ("reprise effacée une fois tout fini", o.get("labelAfter") == "Étiqueter toute la collection"),
         ("étiquetage terminé sur les 4 pages", o.get("finished") is True and o.get("pages") == [50, 50, 50, 50]
             and {a.split(":")[0] for a in o.get("applied", [])} == {"1", "2", "3", "4"}),
@@ -145,9 +160,9 @@ SCENARIOS = [
         ("« Défausser » jamais touché, mode sélection quitté", o.get("discarded") == 0 and o.get("selectionLeft") is True),
     ]),
     ("collection-sell", "page", "/collection/?sell", None, lambda o: [
-        ("raretés choisies dans le panneau", o.get("chipsOn") == ["SR"]),
+        ("raretés choisies dans le panneau", o.get("chipsOn") == ["UR"]),
         ("vente terminée", o.get("finished") is True),
-        ("exactement les SR sans étiquette vendus (pas les R), sur toutes les pages", (o.get("counts") or [0])[0] > 0
+        ("exactement les UR sans étiquette vendus (pas les R ni les L), sur toutes les pages", (o.get("counts") or [0])[0] > 0
             and o.get("missing") == [] and o.get("extra") == [] and len(o.get("rounds", [])) >= 2),
         ("favoris et shiny gardés", (o.get("protectedCount") or 0) > 0 and "gardée" in (o.get("note") or "")),
         ("filtres remis à zéro, mode sélection quitté", o.get("filtersReset") is True and o.get("clean") is True),
@@ -214,6 +229,18 @@ SCENARIOS = [
 ]
 
 
+def with_formats(scenarios, names):
+    """Ajoute les variantes « nom@format » des scénarios `names` pour chaque format de FORMATS."""
+    out = list(scenarios)
+    for name, kind, path, mode, checks in scenarios:
+        if name in names:
+            out += [(f"{name}@{f}", kind, path, mode, checks) for f in FORMATS]
+    return out
+
+
+SCENARIOS = with_formats(SCENARIOS, {"collection-autotag", "collection-sell"})
+
+
 def main(argv):
     built = build.main()
     browser = browser_path()
@@ -226,16 +253,17 @@ def main(argv):
         for name, kind, path, mode, checks in SCENARIOS:
             if not any(w in name for w in wanted):
                 continue
-            if name == "collection" and "collection" not in built:
+            size = name.partition("@")[2] or DEFAULT_SIZE
+            if name.startswith("collection") and "collection" not in built:
                 print(f"- {name} : sauté (aucun snapshot de la page Collection dans input/)")
                 continue
             if (mode == "reveal" or kind == "cdp") and "reveal" not in built:
                 print(f"- {name} : sauté (aucun export de l'écran d'ouverture dans input/)")
                 continue
             if kind == "page":
-                out = cdp(browser, base + path, "page")
+                out = cdp(browser, base + path, "page", size=size)
             elif kind == "cdp":
-                out = cdp(browser, base + path, mode)
+                out = cdp(browser, base + path, mode, size=size)
             else:
                 extra = ["--disable-features=DisableLoadExtensionCommandLineSwitch", f"--load-extension={build.OUT / 'ext_selftest'}"]
                 out = cdp(browser, "", "selftest", extra)

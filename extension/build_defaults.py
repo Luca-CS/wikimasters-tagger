@@ -62,6 +62,10 @@ def main():
             "naturalRhythm": True,  # légères variations corrélées du délai (lib/rhythm.js)
             # Après TON clic sur « Ouvrir », rouvre les paquets disponibles à ce moment-là.
             "autoChain": True,
+            # Pilote (sous ta supervision) : ouvre les paquets dès qu'ils arrivent, même onglet
+            # caché, puis étiquette les cartes tirées dans la Collection. Désactivé par défaut.
+            "autoOpen": False,
+            "autoTagPulled": True,
             # Vente (défausse) des cartes sans étiquette : raretés choisies dans le panneau,
             # favoris et cartes shiny gardés.
             "sellRarities": [],

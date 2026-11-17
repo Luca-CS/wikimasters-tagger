@@ -42,7 +42,10 @@ def strip_site(html: str) -> str:
     html = re.sub(r'<link[^>]+rel="stylesheet"[^>]*>', "", html)
     # Images de l'export (non copiées) : des dizaines de 404 par page saturaient le serveur de
     # test, au point qu'un script de l'extension manquait parfois. Image vide à la place.
-    return re.sub(r'(<img\b[^>]*?\s)src="\./[^"]*"', r'\1src="data:,"', html)
+    html = re.sub(r'(<img\b[^>]*?\s)src="\./[^"]*"', r'\1src="data:,"', html)
+    # Liens absolus vers le vrai site (réécrits par « Enregistrer sous ») : liens locaux, pour
+    # que la navigation du pilote reste dans le banc de test.
+    return re.sub(r'href="https://(?:www\.)?wiki-masters\.com/', 'href="/', html)
 
 
 def css_links(css_files) -> str:

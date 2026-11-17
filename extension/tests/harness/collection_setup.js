@@ -20,10 +20,11 @@
   const c = WMT.defaults.config();
   c.settings.pageDelay = 300;
   c.rules.find((r) => r.name === "Maths").color = "#000000";
-  window.__store.config = c;
+  const pilotRun = sessionStorage.getItem("__simPilot") === "1";
+  if (!pilotRun || !window.__store.config) window.__store.config = c; // le pilote garde sa config
 
   const PAGES = 4;
-  let page = 2;
+  let page = pilotRun ? 1 : 2;
   const roots = [...document.querySelectorAll("div.relative.isolate.group")];
   // Contenu de test : le balisage reste celui du snapshot, mais les cartes sans étiquette
   // reçoivent des descriptions qui déclenchent les règles (une sur quatre reste neutre), et une
@@ -74,7 +75,13 @@
       inventory.push({ t, title: p === 2 ? base : `${base} ·${p}`, rarity: badge ? badge.firstChild.textContent.trim() : "", starred: starredT.has(t) });
     });
   }
+  // Pilote : cartes tirées sur la page Paquets de test, ajoutées en dernier (tri « Date d'ajout »).
+  const freeT = template.findIndex((r, t) => !chipsOf(r).length && !starredT.has(t));
+  JSON.parse(sessionStorage.getItem("__simPulled") || "[]").forEach(([title, desc, rarity], i) => {
+    inventory.push({ t: freeT, title, desc, rarity, starred: false, added: i + 1 });
+  });
   window.__inventory = inventory;
+  let sortLabel = "Rareté";
   const filters = { untagged: false, rarities: new Set() };
   window.__filters = filters;
   window.__sold = [];
@@ -328,6 +335,10 @@
         n++;
       }
       window.__applied.push({ page, tag, titles: [...selected] });
+      if (pilotRun) {
+        const prev = JSON.parse(sessionStorage.getItem("__simApplied") || "[]");
+        sessionStorage.setItem("__simApplied", JSON.stringify([...prev, ...[...selected].map((t) => `${t}:${tag}`)]));
+      }
       m.querySelector(".sim-body").innerHTML = `<p><span>${n}</span> ${n > 1 ? "cartes étiquetées" : "carte étiquetée"}.</p><button type="button">Terminé</button>`;
       m.querySelector(".sim-body button").addEventListener("click", () => m.remove());
       reload(); // le site recharge la collection après avoir posé l'étiquette
@@ -336,8 +347,9 @@
 
   const cardTags = (it) => [...tagsOf(template[it.t]), ...(added.get(it.title) || [])];
   function visible() {
-    return inventory.filter((it) => (!filters.untagged || !cardTags(it).length) &&
+    const list = inventory.filter((it) => (!filters.untagged || !cardTags(it).length) &&
       (!filters.rarities.size || filters.rarities.has(it.rarity)));
+    return sortLabel === "Date d'ajout" ? [...list].sort((a, b) => (b.added || 0) - (a.added || 0)) : list;
   }
   let empty = null;
   function render(lateTotal = false) {
@@ -356,6 +368,9 @@
     grid.replaceChildren(...list.slice((page - 1) * 50, page * 50).map((it) => {
       const n = template[it.t].cloneNode(true);
       n.querySelector("h3").textContent = it.title;
+      if (it.desc && n.querySelector("p")) n.querySelector("p").textContent = it.desc;
+      const badge = it.desc && rarityLeaf(n);
+      if (badge) badge.textContent = it.rarity;
       addChips(n);
       decorate(n);
       return n;
@@ -397,6 +412,33 @@
     }
     document.body.append(ul);
   });
+  // Tri (même liste déroulante que le filtre d'étiquette).
+  const sortBtn = document.querySelector('button[aria-label="Trier la collection"]');
+  if (sortBtn) {
+    const sortText = [...sortBtn.querySelectorAll("span")].find((e) => e.childElementCount === 0 && e.textContent.trim()) || sortBtn;
+    sortBtn.addEventListener("click", () => {
+      const open = document.querySelector('[role="listbox"]');
+      if (open) return open.remove();
+      const ul = document.createElement("ul");
+      ul.setAttribute("role", "listbox");
+      for (const label of ["Rareté", "Nom", "Favoris", "Date d'ajout"]) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.setAttribute("role", "option");
+        b.textContent = label;
+        b.addEventListener("click", () => {
+          ul.remove();
+          sortLabel = label;
+          sortText.textContent = label;
+          window.__sortChanges = (window.__sortChanges || 0) + 1;
+          page = 1;
+          reload();
+        });
+        ul.append(b);
+      }
+      document.body.append(ul);
+    });
+  }
   for (const chip of [...document.querySelectorAll("main button")].filter((b) => /^(L|UR|SR|R|PC|C)$/.test(b.textContent.trim()))) {
     const r = chip.textContent.trim();
     chip.className = "px-3 py-1 rounded-full text-xs font-semibold opacity-50";

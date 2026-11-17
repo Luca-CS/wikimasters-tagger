@@ -106,6 +106,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (!alarm.name.startsWith("wmt-")) return;
   const { settings, est } = await current();
   await updateBadge(est);
+  if (alarm.name === "wmt-badge" && settings.autoOpen) await wakePilot();
   if (!est || alarm.name === "wmt-badge") return;
   if (alarm.name === "wmt-full" && est.count >= est.max) await onFull(settings, est);
   if (alarm.name === "wmt-next" && settings.notifyEach && est.count < est.max) {
@@ -119,10 +120,31 @@ async function testNotify() {
   return { ok: true };
 }
 
-chrome.notifications.onClicked.addListener((id) => {
+chrome.notifications.onClicked.addListener(async (id) => {
   if (!id.startsWith("wmt-")) return;
   chrome.notifications.clear(id);
-  chrome.tabs.create({ url: PULLS });
+  // Alerte du pilote : retour à l'onglet WikiMasters qui l'a envoyée.
+  const [tab] = id === "wmt-pilot" ? await siteTabs() : [];
+  if (tab) {
+    await chrome.tabs.update(tab.id, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+  } else {
+    chrome.tabs.create({ url: PULLS });
+  }
+});
+
+// --- Pilote automatique : réveil de l'onglet et alertes ------------------------------------
+// L'onglet du pilote vérifie lui-même le stock toutes les 3 s ; l'alarme de chaque minute
+// (wmt-badge) le réveille en plus, au cas où Chrome l'aurait mis en veille.
+
+const siteTabs = () => chrome.tabs.query({ url: ["https://www.wiki-masters.com/*", "https://wiki-masters.com/*"] }).catch(() => []);
+
+async function wakePilot() {
+  for (const tab of await siteTabs()) chrome.tabs.sendMessage(tab.id, { type: "pilotWake" }).catch(() => {});
+}
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.type === "pilotAlert") notify("wmt-pilot", "Pilote WikiMasters", String(msg.text).slice(0, 300));
 });
 
 // --- Collecte du marché (lecture seule) -------------------------------------------------

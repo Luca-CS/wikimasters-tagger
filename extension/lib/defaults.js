@@ -925,6 +925,8 @@
       "revealDelay": 200,
       "naturalRhythm": true,
       "autoChain": true,
+      "autoOpen": false,
+      "autoTagPulled": true,
       "sellRarities": [],
       "sellKeep": true
     }

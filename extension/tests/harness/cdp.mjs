@@ -81,8 +81,9 @@ try {
   const { call } = page;
   // Onglet au premier plan et considéré comme actif : sinon Chrome le traite comme masqué
   // (document.hidden, minuteurs ralentis) et l'extension se met en pause comme prévu.
+  // Onglet au premier plan. L'émulation du focus (onglet actif même caché) n'est activée que
+  // par le pilote de l'extension (op « attach »), comme le fait lib/driver.js.
   await call("Page.bringToFront");
-  await call("Emulation.setFocusEmulationEnabled", { enabled: true });
   // Journal de la console (exceptions comprises), joint au résultat en cas d'échec.
   out.console = [];
   page.ws.addEventListener("message", (event) => {
@@ -105,7 +106,12 @@ try {
     const { id, msg: m } = JSON.parse(msg.params.payload);
     let res = { ok: true, attached: true };
     try {
-      if (m.op === "click") {
+      if (m.op === "attach") {
+        out.drive.attaches = (out.drive.attaches || 0) + 1;
+        await call("Emulation.setFocusEmulationEnabled", { enabled: true });
+      } else if (m.op === "detach") {
+        await call("Emulation.setFocusEmulationEnabled", { enabled: false });
+      } else if (m.op === "click") {
         out.drive.clicks++;
         await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: m.x, y: m.y, button: "none", buttons: 0 });
         await call("Input.dispatchMouseEvent", { type: "mousePressed", x: m.x, y: m.y, button: "left", buttons: 1, clickCount: 1 });
@@ -125,7 +131,11 @@ try {
     }
     await call("Runtime.evaluate", { expression: `window.__wmtDriveReply(${JSON.stringify(id)}, ${JSON.stringify(res)})` });
   });
-  const ev = async (expr) => (await call("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result.value;
+  // Tolérant aux changements de page (le pilote navigue) : undefined pendant le chargement.
+  const ev = async (expr) => {
+    const r = await call("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true });
+    return r && r.result ? r.result.value : undefined;
+  };
   const until = async (expr, ms) => {
     const end = Date.now() + ms;
     while (Date.now() < end) {
@@ -150,7 +160,35 @@ try {
   const done = `__sim.count === 0 && !WMT.dom.reveal() && __sim.continues === 3`;
 
   out.visibility = await ev(`document.visibilityState`);
-  if (mode === "selftest" || mode === "page") {
+  if (mode === "pilot") {
+    // Ton seul geste : activer le pilote dans le panneau (vrai clic). Puis tu passes sur un
+    // autre onglet : celui du jeu est en arrière-plan pendant tout le reste.
+    await until(`!!document.getElementById("wmt-host") && !!window.WMT_openButton && !!WMT_openButton()`, 15000);
+    await sleep(800);
+    out.visibleBefore = await ev(`document.visibilityState`);
+    await clickOn(`[...document.getElementById("wmt-host").shadowRoot.querySelectorAll("label.toggle")].find((l) => l.textContent.includes("Pilote")).querySelector("input")`);
+    const other = await http(`/json/new?${encodeURIComponent("about:blank")}`, "PUT");
+    const front = await connect(other.webSocketDebuggerUrl);
+    await front.call("Page.bringToFront");
+    await sleep(300);
+    out.otherTabVisible = await (async () => {
+      const r = await front.call("Runtime.evaluate", { expression: "document.visibilityState", returnByValue: true });
+      return r && r.result ? r.result.value : null;
+    })();
+    const state = `JSON.parse(sessionStorage.getItem("__sim") || "{}")`;
+    out.reachedCollection = await until(`location.pathname.startsWith("/collection")`, 90000);
+    out.backToPulls = await until(`location.pathname.startsWith("/pulls") && !!sessionStorage.getItem("__simApplied")`, 120000);
+    out.pendingOnReturn = await ev(`(() => { const s = JSON.parse(sessionStorage.getItem("__wmtStore") || "{}"); return s.pilot ? s.pilot.pending : null; })()`);
+    out.thirdOpen = await until(`(${state}.opens || []).length >= 3`, 90000);
+    await sleep(2000);
+    out.pilotSim = await ev(`({ opens: ${state}.opens, regenerated: !!${state}.regenerated })`);
+    out.applied = await ev(`JSON.parse(sessionStorage.getItem("__simApplied") || "[]")`);
+    out.pulledSim = await ev(`JSON.parse(sessionStorage.getItem("__simPulled") || "[]").map((x) => x[0])`);
+    out.store = await ev(`(() => { const s = JSON.parse(sessionStorage.getItem("__wmtStore") || "{}"); return { autoOpen: s.config && s.config.settings.autoOpen, pending: s.pilot && s.pilot.pending }; })()`);
+    out.panel = await panel();
+    out.finalUrl = await ev(`location.href`);
+    out.sessionKeys = await ev(`Object.keys(sessionStorage)`);
+  } else if (mode === "selftest" || mode === "page") {
     await until(`!!document.getElementById("wmt-out")`, 150000);
     Object.assign(out, JSON.parse(await ev(`document.getElementById("wmt-out").textContent`)));
   } else {

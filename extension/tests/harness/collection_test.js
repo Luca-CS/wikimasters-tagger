@@ -2,6 +2,7 @@
 // à la main (le surlignage doit partir), analyse des 4 pages, demande de catégorisation.
 // Résultat JSON dans <pre id="wmt-out"> (lu par run.py). ?open = panneau ouvert, sans scénario.
 (async function () {
+  if (sessionStorage.getItem("__simPilot") === "1") return; // le pilote agit seul (cdp.mjs vérifie)
   if (location.search.includes("open")) {
     sessionStorage.setItem("wmt-open-collection", "1");
     return;

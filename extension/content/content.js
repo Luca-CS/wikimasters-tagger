@@ -40,6 +40,7 @@
     scanMeta = await store.get("scanMeta");
     packsState = await store.get("packs");
     tagResume = await store.get("tagRun");
+    pilot = (await store.get("pilot")) || { pending: [] };
     memo = new Map();
   }
 
@@ -49,6 +50,7 @@
         config = await store.getConfig();
         rules = core.compileRules(config.rules);
         memo = new Map();
+        if (route === "pulls") pilotOn() ? startPilot() : pausePilot();
       }
       if (ch.wd) {
         wd = ch.wd.newValue || null;
@@ -57,6 +59,7 @@
       if (ch.scanMeta) scanMeta = ch.scanMeta.newValue || null;
       if (ch.packs) packsState = ch.packs.newValue || null;
       if (ch.tagRun) tagResume = ch.tagRun.newValue || null;
+      if (ch.pilot) pilot = ch.pilot.newValue || { pending: [] };
       if (route) {
         renderPanel();
         scheduleRefresh();
@@ -185,6 +188,7 @@
     const matches = suggestionsFor(card);
     pulled.set(card.title, { card, matches });
     paint(c, config.settings.highlight ? matches : []);
+    pilotRemember(card, matches);
   }
 
   // --- Défilement automatique et enchaînement des ouvertures ---------------------------
@@ -246,6 +250,7 @@
     if (on && !document.hidden) {
       const what = dom.blockingText();
       log("pause :", what || "fenêtre du site affichée");
+      if (pilotOn()) pilotAlert(`Pause : ${what || "une fenêtre du site est affichée"}. Le pilote reprendra quand elle aura disparu.`);
       note("Pause : une fenêtre du site est affichée (vérification, annonce…). Ça reprend tout seul quand elle disparaît.", "warn");
     } else if (!on) {
       note(null);
@@ -288,6 +293,7 @@
   /** La page affiche une sanction : on arrête tout, sans insister. */
   function stopForSanction() {
     stopAll();
+    if (pilotOn()) stopPilot(null);
     stopMarketForSanction();
     const message = "Le site affiche une sanction : tout l'automatique est arrêté. Ne relance pas l'enchaînement, regarde tes messages sur le site.";
     log(message);
@@ -442,12 +448,16 @@
       log(message);
       note(message, message.startsWith("✓") ? "ok" : "warn", null, sticky ? 0 : 15000);
     }
+    // Arrêt sur erreur (refus du site, bouton introuvable…) : le pilote s'arrête aussi, pour
+    // ne pas recommencer en boucle.
+    if (sticky && pilotOn()) stopPilot(null);
     renderAuto();
   }
 
-  function startChain() {
+  /** Enchaînement : par ton appui sur « Ouvrir », ou par le pilote (`auto`). */
+  function startChain(auto = false) {
     note(null);
-    if (orphaned || !config || !config.settings.autoReveal || !config.settings.autoChain) return; // config pas encore chargée
+    if (orphaned || !config || !config.settings.autoReveal || !(config.settings.autoChain || auto)) return; // config pas encore chargée
     const live = dom.packs();
     const total = Math.max(1, live ? live.count : 1);
     const job = (chain = { abort: false, left: total - 1, total, held: true });
@@ -507,6 +517,14 @@
     ui.autoStatus.hidden = !parts.length;
     ui.autoStatus.textContent = parts.join(" · ");
     ui.autoStop.hidden = !(autoRun || chain);
+    if (ui.pilotStatus) {
+      const on = pilotOn();
+      const todo = pilot.pending.length;
+      ui.pilotStatus.hidden = !on;
+      ui.pilotStatus.textContent = !on ? "" : chain || autoRun ? "Pilote : ouverture en cours." :
+        `Pilote actif : en attente d'un paquet${todo ? ` · ${plural(todo, "carte tirée")} à étiqueter` : ""}.`;
+      ui.pilotStop.hidden = !on;
+    }
   }
 
   function renderPulled(shown) {
@@ -608,6 +626,224 @@
     ui.packInfo.textContent = est ? `${packs.describe(est)} · compte ${plan}` : `Compte ${plan}.`;
     ui.packNotif.textContent = s.notifyFull ? "Notification quand c'est plein." : "Aucun rappel activé.";
     ui.fabLabel.textContent = count != null ? `Tagger · ${count}/${max}` : "Tagger";
+  }
+
+  // --- Pilote automatique (décidé le 17/11/2026) ------------------------------------------
+  // Activé dans le panneau des Paquets (« Ouvrir les paquets dès qu'ils arrivent »), sous ta
+  // supervision : dès qu'un paquet est disponible, l'extension l'ouvre elle-même, fait défiler
+  // les cartes et enchaîne tant qu'il en reste. Une fois le stock vide, si « Puis étiqueter les
+  // cartes tirées » est coché, elle va sur la Collection (sans filtre, tri « Date d'ajout » :
+  // les cartes tirées sont en tête), y pose les étiquettes suggérées pour ces cartes, puis
+  // revient attendre le paquet suivant. Pas de filtre « Sans étiquette » : une carte qui a deux
+  // étiquettes à poser en disparaîtrait dès la première. Le pilote garde l'onglet actif même caché (lib/driver.js).
+  // Il s'arrête par « Arrêter le pilote », et pour de bon sur une sanction ou un refus du site
+  // (le réglage est alors coupé). Les cartes à étiqueter sont gardées dans le stockage (clé
+  // pilot) : après un rechargement de la page, le pilote reprend où il en était.
+
+  let pilot = { pending: [] }; // {pending: titres des cartes tirées à étiqueter}
+  let pilotBusy = false;
+  let pilotTimer = 0;
+  let pilotHeld = false;
+  let pilotAlerted = "";
+  const PILOT_EVERY = 3000; // ms entre deux vérifications du stock (l'onglet reste actif)
+  const PILOT_PAGES = 3; // pages lues au plus pour retrouver les cartes tirées (tri par date)
+
+  const pilotOn = () => !!(config && config.settings.autoOpen) && !orphaned;
+
+  // Un seul onglet pilote : deux onglets sur la page Paquets ouvriraient chacun des paquets.
+  // Verrou {id, at} dans le stockage, renouvelé à chaque vérification, libre après 15 s.
+  const PILOT_ID = Math.random().toString(36).slice(2);
+  const PILOT_LOCK_MS = 15000;
+  let pilotLock = null;
+  store.get("pilotLock").then((v) => (pilotLock = v || null), () => {});
+  store.onChange((ch) => {
+    if (ch.pilotLock) pilotLock = ch.pilotLock.newValue || null;
+  });
+  async function pilotClaim() {
+    const now = Date.now();
+    if (pilotLock && pilotLock.id !== PILOT_ID && now - pilotLock.at < PILOT_LOCK_MS) return false;
+    pilotLock = { id: PILOT_ID, at: now };
+    await safe(() => store.set("pilotLock", pilotLock));
+    return true;
+  }
+
+  /** Retient une carte tirée qui a des étiquettes à poser. */
+  function pilotRemember(card, matches) {
+    if (!pilotOn() || !config.settings.autoTagPulled || !matches.length) return;
+    if (pilot.pending.includes(card.title)) return;
+    pilot = { ...pilot, pending: [...pilot.pending, card.title] };
+    safe(() => store.set("pilot", pilot));
+  }
+
+  /** Notification Chrome (onglet caché) : une seule fois par message. */
+  function pilotAlert(text) {
+    if (pilotAlerted === text) return;
+    pilotAlerted = text;
+    safe(() => chrome.runtime.sendMessage({ type: "pilotAlert", text }));
+  }
+
+  /** Démarre le pilote sur la page affichée : onglet actif, vérification régulière du stock. */
+  function startPilot() {
+    if (!pilotOn() || route !== "pulls" || pilotTimer) return;
+    if (!pilotHeld) {
+      pilotHeld = true;
+      hold().catch((e) => stopPilot(`Pilote arrêté : ${e.message}`));
+    }
+    pilotTimer = setInterval(pilotTick, PILOT_EVERY);
+    log("pilote actif");
+    pilotTick();
+  }
+
+  /** Suspend le pilote sur cette page (changement de page) sans couper le réglage. */
+  function pausePilot() {
+    clearInterval(pilotTimer);
+    pilotTimer = 0;
+    if (pilotHeld) {
+      pilotHeld = false;
+      release();
+    }
+  }
+
+  /** Coupe le pilote (réglage désactivé). */
+  function stopPilot(message) {
+    pausePilot();
+    if (config && config.settings.autoOpen) setSetting("autoOpen", false);
+    if (message) {
+      log(message);
+      note(message, "warn", null, 0);
+      pilotAlert(message);
+    }
+    renderAuto();
+  }
+
+  /** Va sur `path` par le lien du site (navigation interne), sinon par l'adresse. */
+  async function pilotGo(path) {
+    log(`pilote : vers ${path}`);
+    await hold();
+    try {
+      const link = dom.navLink(path);
+      if (link) await act.click(link, `lien « ${path} »`);
+      else location.assign(path);
+      await waitFor({ abort: false }, () => location.pathname.replace(/\/+$/, "") === path, 10000);
+    } finally {
+      release();
+    }
+  }
+
+  /** Une vérification du pilote sur la page Paquets. */
+  async function pilotTick() {
+    if (!pilotOn() || route !== "pulls" || pilotBusy || chain || autoRun || dom.reveal()) return;
+    if (dom.sanction()) return stopForSanction();
+    if (dom.blockingDialog()) return; // vérification, annonce : on attend qu'elle disparaisse
+    const live = dom.packs();
+    if (!live) return;
+    pilotBusy = true;
+    try {
+      if (!(await pilotClaim())) return; // un autre onglet pilote déjà
+      if (live.count < 1) {
+        if (config.settings.autoTagPulled && pilot.pending.length) await pilotGo("/collection");
+        return;
+      }
+      const b = dom.openButton();
+      if (!b || b.disabled) return;
+      if (dom.packError() && REFUSAL.test(dom.packError())) return stopPilot(`Le site refuse l'ouverture (« ${dom.packError()} ») : pilote arrêté.`);
+      startChain(true);
+      if (!chain) return;
+      log(`pilote : ouverture (${plural(live.count, "paquet")} disponible${live.count > 1 ? "s" : ""})`);
+      await act.click(b, "bouton « Ouvrir »");
+      // Le défilement prend le relais (refreshPulls → autoReveal → chainNext).
+    } catch (e) {
+      stopPilot(`Pilote arrêté : ${e.message}`);
+    } finally {
+      pilotBusy = false;
+      renderAuto();
+    }
+  }
+
+  /** Étiquetage des cartes tirées, sur la Collection, puis retour aux Paquets. */
+  async function runPilotTag() {
+    if (scanning || tagging || selling || route !== "collection") return;
+    const job = (tagging = { abort: false, pilot: true });
+    const stats = { applied: 0, pages: 0, failed: 0, byTag: new Map(), skipped: new Map() };
+    const missing = new Set();
+    const pending = new Set(pilot.pending);
+    const total = pending.size;
+    const sortBefore = dom.sortButton() ? dom.clean(dom.sortButton().textContent) : "";
+    let held = false;
+    let done = false;
+    note(null);
+    renderPanel();
+    ui.progress.hidden = false;
+    try {
+      await hold();
+      held = true;
+      await leaveSelection();
+      await waitIdle(job);
+      ui.ptext.textContent = `Pilote : ${plural(total, "carte tirée")} à étiqueter…`;
+      await setTagFilter(job, "Toutes les étiquettes");
+      await setRarityFilter(job, new Set());
+      await setSort(job, "Date d'ajout");
+      let p = pageInfo();
+      if (p.page !== 1) p = await goToPage(job, 1, "Retour au début");
+      for (let guard = 0; pending.size && guard < 40; guard++) {
+        await waitIdle(job);
+        p = pageInfo();
+        const here = dom.cards(document, knownTags()).filter((c) => pending.has(c.title));
+        if (!here.length) {
+          // Les cartes les plus récentes sont en tête : inutile d'aller plus loin.
+          if (p.page >= PILOT_PAGES || !(await hasNextPage(job))) break;
+          p = await turnPage(job, 1);
+          continue;
+        }
+        const plan = new Map();
+        for (const c of here) {
+          pending.delete(c.title);
+          for (const m of suggestionsFor(c)) {
+            if (!plan.has(m.tag)) plan.set(m.tag, []);
+            plan.get(m.tag).push({ pos: c.pos, title: c.title });
+          }
+        }
+        for (const [tag, items] of plan) {
+          ui.ptext.textContent = `Pilote : ${tag} (${plural(items.length, "carte")}) · ${plural(stats.applied, "étiquette")} posées`;
+          if (missing.has(tag) || !(await applyTag(job, tag, items, stats))) {
+            missing.add(tag);
+            stats.skipped.set(tag, (stats.skipped.get(tag) || 0) + items.length);
+          }
+          await step(job, 250);
+        }
+        stats.pages++;
+      }
+      done = true;
+      const lost = pending.size ? ` ${plural(pending.size, "carte tirée")} introuvable${pending.size > 1 ? "s" : ""} parmi les ${PILOT_PAGES * 50} cartes les plus récentes.` : "";
+      log("pilote : étiquetage terminé :", tagSummary(stats) + lost);
+      note(`✓ Pilote : ${tagSummary(stats)}${lost}`, "ok", null, 30000);
+    } catch (e) {
+      log("pilote : étiquetage interrompu :", e && e.message);
+      if (e instanceof Aborted) note(`Étiquetage du pilote arrêté. ${tagSummary(stats)}`, "warn");
+      else stopPilot(`Étiquetage du pilote interrompu : ${e.message} ${tagSummary(stats)}`);
+    } finally {
+      await leaveSelection();
+      const reset = { abort: false };
+      try {
+        if (sortBefore && sortBefore !== "Date d'ajout") await setSort(reset, sortBefore);
+      } catch (e) {
+        log("filtres non remis comme avant :", e.message);
+      }
+      if (done) {
+        pilot = { ...pilot, pending: [] };
+        await safe(() => store.set("pilot", pilot));
+      }
+      if (held) release();
+      tagging = null;
+      if (ui) {
+        ui.progress.hidden = true;
+        renderPanel();
+      }
+      refresh();
+      if (done && !job.abort && pilotOn()) {
+        await pilotGo("/pulls").catch((e) => stopPilot(`Pilote arrêté : ${e.message}`));
+      }
+    }
   }
 
   // --- Pilotage de la page Collection --------------------------------------------------
@@ -961,6 +1197,7 @@
   function stopTagging() {
     if (!tagging || tagging.abort) return;
     tagging.abort = true;
+    if (tagging.pilot) stopPilot("Pilote arrêté.");
     log("étiquetage arrêté depuis le panneau");
   }
 
@@ -1028,18 +1265,22 @@
   let selling = null; // {abort}
   const RARITY_ORDER = ["L", "UR", "SR", "R", "PC", "C"];
 
-  async function setTagFilter(job, label) {
+  /** Choisit `label` dans une liste déroulante du site (même composant pour le filtre et le tri). */
+  async function setListChoice(job, button, label, what) {
     await waitIdle(job);
-    const b = dom.tagFilterButton();
-    if (!b) throw new Error("filtre d'étiquette introuvable.");
+    const b = button();
+    if (!b) throw new Error(`${what} introuvable.`);
     if (dom.clean(b.textContent) === label) return;
-    await act.click(b, "filtre d'étiquette");
-    await until(job, () => dom.tagFilterOptions().has(label), 5000, `option « ${label} » introuvable dans le filtre d'étiquette.`);
+    await act.click(b, what);
+    await until(job, () => dom.tagFilterOptions().has(label), 5000, `option « ${label} » introuvable (${what}).`);
     await step(job);
     const option = dom.tagFilterOptions().get(label);
-    await reloadAfter(job, () => act.click(option, `option « ${label} »`), `Filtre « ${label} »`);
-    if (dom.clean(dom.tagFilterButton().textContent) !== label) throw new Error(`le filtre « ${label} » ne s'est pas appliqué.`);
+    await reloadAfter(job, () => act.click(option, `option « ${label} »`), `${what} « ${label} »`);
+    if (dom.clean(button().textContent) !== label) throw new Error(`${what} « ${label} » ne s'est pas appliqué.`);
   }
+
+  const setTagFilter = (job, label) => setListChoice(job, dom.tagFilterButton, label, "filtre d'étiquette");
+  const setSort = (job, label) => setListChoice(job, dom.sortButton, label, "tri");
 
   async function setRarityFilter(job, wanted) {
     for (const r of RARITY_ORDER) {
@@ -1277,6 +1518,14 @@
       onPulls && h("label", { class: "toggle", title: "Après ton clic sur « Ouvrir » : rouvre les paquets disponibles à ce moment-là, un par un" },
         h("span", {}, "Enchaîner les paquets disponibles"),
         ref("chain", h("input", { type: "checkbox", class: "switch", onchange: (e) => setSetting("autoChain", e.target.checked) }))),
+      onPulls && h("label", { class: "toggle", title: "Sous ta supervision : ouvre les paquets dès qu'ils sont disponibles, même onglet caché. « Arrêter le pilote » l'arrête." },
+        h("span", {}, "Pilote : ouvrir les paquets dès qu'ils arrivent"),
+        ref("pilot", h("input", { type: "checkbox", class: "switch", onchange: (e) => setSetting("autoOpen", e.target.checked) }))),
+      onPulls && h("label", { class: "toggle", title: "Une fois le stock vide : étiquette les cartes tirées dans la Collection, puis revient ici." },
+        h("span", {}, "Puis étiqueter les cartes tirées"),
+        ref("pilotTag", h("input", { type: "checkbox", class: "switch", onchange: (e) => setSetting("autoTagPulled", e.target.checked) }))),
+      onPulls && ref("pilotStatus", h("p", { class: "muted", hidden: true })),
+      onPulls && ref("pilotStop", h("button", { class: "link", hidden: true, onclick: () => stopPilot("Pilote arrêté.") }, "Arrêter le pilote")),
       onPulls && ref("autoStatus", h("p", { class: "muted", hidden: true })),
       onPulls && ref("autoStop", h("button", { class: "link", hidden: true, onclick: () => stopAll("Automatique arrêté.") }, "Arrêter")));
 
@@ -1403,8 +1652,13 @@
 
   async function setSetting(key, value) {
     if ((key === "autoReveal" || key === "autoChain") && !value) stopAll();
+    if (key === "autoReveal" && !value && config.settings.autoOpen) config.settings.autoOpen = false;
     config = { ...config, settings: { ...config.settings, [key]: value } };
     memo = new Map();
+    if (key === "autoOpen" || key === "autoReveal") {
+      if (pilotOn()) startPilot();
+      else pausePilot();
+    }
     renderPanel();
     refresh();
     await safe(() => store.saveConfig(config));
@@ -1427,6 +1681,10 @@
       ui.auto.checked = !!s.autoReveal;
       ui.chain.checked = !!s.autoChain;
       ui.chain.disabled = !s.autoReveal;
+      ui.pilot.checked = !!s.autoOpen;
+      ui.pilot.disabled = !s.autoReveal;
+      ui.pilotTag.checked = s.autoTagPulled !== false;
+      ui.pilotTag.disabled = !s.autoOpen;
       renderPacks();
       renderAuto();
       return;
@@ -1494,12 +1752,18 @@
     if (route === "pulls") packsTimer = setInterval(() => renderPacks(), 30000);
     refresh();
     maybePrompt();
+    // Pilote : attente des paquets sur les Paquets, étiquetage des cartes tirées sur la Collection.
+    if (route === "pulls") startPilot();
+    if (route === "collection" && pilotOn() && config.settings.autoTagPulled && pilot.pending.length) {
+      setTimeout(() => route === "collection" && runPilotTag(), 1500);
+    }
   }
 
   function unmount() {
     if (observer) observer.disconnect();
     observer = null;
     clearInterval(packsTimer);
+    pausePilot();
     if (scanning) scanning.abort = true;
     if (tagging) tagging.abort = true;
     if (selling) selling.abort = true;
@@ -1562,6 +1826,7 @@
       if (autoRun || chain) stopAll();
       if (msg.reason === "canceled_by_user") note("Bandeau de débogage fermé : automatique arrêté (il en a besoin pour cliquer).", "warn", null, 15000);
     }
+    if (msg && msg.type === "pilotWake") pilotTick();
     if (msg && msg.type === "panel") {
       if (route) setOpen(true);
       reply({ ok: !!route });

@@ -9,7 +9,10 @@
 //   ?state=pingpong   5/10 ; le scénario simule un autre onglet qui réécrit 10/10 en boucle
 //   ?state=chain      simulateur complet pour l'enchaînement (voir chain_sim.js)
 //   &open             panneau ouvert, sans scénario (captures) ; &card2 : 2e carte affichée
-window.PARAMS = new URLSearchParams(location.search);
+//   &pilot            (avec state=chain) scénario du pilote : état gardé d'une page à l'autre
+// Le pilote revient sur « /pulls » sans paramètres : on reprend ceux du premier chargement.
+if (location.search) sessionStorage.setItem("__simQuery", location.search);
+window.PARAMS = new URLSearchParams(location.search || sessionStorage.getItem("__simQuery") || "");
 window.STATE = PARAMS.get("state") || "full";
 
 const PULLS = `
@@ -48,7 +51,7 @@ window.pullsMain = (n, timer) =>
     regen: pullsMain(7, "1:43"),
     chain: "",
   }[STATE] ?? pullsMain(10, "");
-  if (PARAMS.has("open")) sessionStorage.setItem("wmt-open-pulls", "1");
+  if (PARAMS.has("open") || PARAMS.has("pilot")) sessionStorage.setItem("wmt-open-pulls", "1");
   if (PARAMS.has("card2")) {
     main.querySelector("h3").textContent = "Sydney Park";
     main.querySelector("h3").nextElementSibling.textContent = "Sydney Park, née le 31 octobre 1997 à Los Angeles, est une actrice américaine.";

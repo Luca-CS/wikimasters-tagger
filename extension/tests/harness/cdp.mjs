@@ -45,17 +45,33 @@ let page = null;
 try {
   await http("/json/version");
   let target = url;
+  let tab = null;
   if (mode === "selftest") {
-    // Identifiant de l'extension chargée : celui de son service worker.
-    let sw = null;
-    for (let i = 0; i < 40 && !sw; i++) {
-      sw = (await http("/json/list")).find((t) => t.type === "service_worker" && t.url.endsWith("/background.js"));
-      if (!sw) await sleep(250);
+    // Identifiant de l'extension chargée : celui de son service worker. Edge a aussi des
+    // extensions intégrées avec un « background.js » : on essaie chaque candidat et on garde
+    // celui dont la page d'auto-test existe (avant, le premier trouvé était parfois le mauvais).
+    let candidates = [];
+    for (let i = 0; i < 40 && !candidates.length; i++) {
+      candidates = (await http("/json/list")).filter((t) => t.type === "service_worker" && t.url.endsWith("/background.js"));
+      if (!candidates.length) await sleep(250);
     }
-    if (!sw) throw new Error("service worker de l'extension introuvable");
-    target = sw.url.replace("/background.js", "/pages/_selftest.html");
+    for (const sw of candidates) {
+      const t = await http(`/json/new?${encodeURIComponent(sw.url.replace("/background.js", "/pages/_selftest.html"))}`, "PUT");
+      const probe = await connect(t.webSocketDebuggerUrl);
+      await sleep(1500);
+      const r = await probe.call("Runtime.evaluate", { expression: `!!document.querySelector('script[src="_selftest.js"]') || !!document.getElementById("wmt-out")`, returnByValue: true });
+      if (r && r.result && r.result.value === true) {
+        tab = t;
+        probe.ws.close();
+        break;
+      }
+      probe.ws.close();
+      await http(`/json/close/${t.id}`).catch(() => {});
+    }
+    if (!tab) throw new Error("service worker de l'extension introuvable");
+  } else {
+    tab = await http(`/json/new?${encodeURIComponent(target)}`, "PUT");
   }
-  const tab = await http(`/json/new?${encodeURIComponent(target)}`, "PUT");
   page = await connect(tab.webSocketDebuggerUrl);
   const { call } = page;
   // Onglet au premier plan et considéré comme actif : sinon Chrome le traite comme masqué
@@ -157,8 +173,13 @@ try {
       await until(done, 90000);
       await sleep(1500);
     } else if (mode === "stop") {
-      // Bouton « Arrêter » du panneau pendant le 2e paquet.
+      // Bouton « Arrêter » du panneau pendant le 2e paquet (panneau ouvert d'abord : il est
+      // replié en pastille par défaut).
       await until(`__sim.opens.length >= 2 && !!WMT.dom.reveal() && WMT.dom.reveal().index >= 2`, 60000);
+      if (await ev(`document.getElementById("wmt-host").shadowRoot.querySelector(".panel").hidden`)) {
+        await clickOn(`document.getElementById("wmt-host").shadowRoot.querySelector(".fab")`);
+        await sleep(400);
+      }
       await clickOn(`[...document.getElementById("wmt-host").shadowRoot.querySelectorAll("button")].find((b) => b.textContent.trim() === "Arrêter" && !b.hidden)`);
       await sleep(1000);
       out.noteJustAfter = await ev(`document.getElementById("wmt-host").shadowRoot.querySelector(".note").textContent`);

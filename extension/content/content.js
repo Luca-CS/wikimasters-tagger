@@ -8,7 +8,7 @@
   if (window.top !== window || window.__wmtLoaded) return;
   window.__wmtLoaded = true;
 
-  const { core, dom, store, packs } = WMT;
+  const { core, dom, store, packs, act } = WMT;
   const ROUTES = { "/collection": "collection", "/pulls": "pulls" };
   const routeOf = () => ROUTES[location.pathname.replace(/\/+$/, "")] || null;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -202,6 +202,26 @@
   const CHAIN_PAUSE = 300; // ms avant de rouvrir, comme un humain qui enchaîne
   const log = (...args) => console.info("[WikiMasters Tagger]", ...args);
 
+  // Pilote (lib/act.js → lib/driver.js) : attaché tant qu'un automatisme tourne, détaché 5 s
+  // après le dernier (le bandeau « débogage » de Chrome disparaît alors).
+  let holds = 0;
+  let detachTimer = 0;
+  async function hold() {
+    clearTimeout(detachTimer);
+    holds++;
+    try {
+      await act.attach();
+    } catch (e) {
+      release();
+      throw new Error(`pilote indisponible : ${e.message}`);
+    }
+  }
+  function release() {
+    holds = Math.max(0, holds - 1);
+    clearTimeout(detachTimer);
+    if (!holds) detachTimer = setTimeout(() => !holds && act.detach(), 5000);
+  }
+
   async function wait(job, ms) {
     const end = Date.now() + ms;
     while (!job.abort && Date.now() < end) await sleep(Math.min(50, end - Date.now()));
@@ -297,6 +317,14 @@
     const job = (autoRun = { abort: false });
     renderAuto();
     try {
+      await hold();
+    } catch (e) {
+      autoRun = null;
+      autoStopped = true;
+      note(`Défilement impossible : ${e.message}`, "err", null, 15000);
+      return renderAuto();
+    }
+    try {
       for (let step = 0; step < 40 && !job.abort; step++) {
         if (!dom.reveal()) return; // écran fermé
         if (dom.sanction()) return stopForSanction();
@@ -324,33 +352,29 @@
           return;
         }
         if (last) {
-          button().click();
+          await act.click(button(), "bouton « Continuer »");
           log("« Continuer » cliqué", chain ? `(enchaînement : ${chain.left} paquet(s) à ouvrir)` : "");
           if (chain && !chain.abort) chainNext(chain);
           return;
         }
-        button().click();
+        await act.click(button(), "bouton « carte suivante »");
         await waitFor(job, () => {
           const r = dom.reveal();
           return !r || r.index !== now.index;
         }, 5000);
         renderAuto();
       }
+    } catch (e) {
+      if (!job.abort) {
+        log("défilement interrompu :", e && e.message);
+        note(`Défilement interrompu : ${e && e.message}`, "err", null, 15000);
+        if (chain) endChain(chain, null);
+      }
     } finally {
+      release();
       if (autoRun === job) autoRun = null;
       renderAuto();
     }
-  }
-
-  /** Clic complet (appui, relâchement, clic) pour les boutons qui réagissent à l'appui. */
-  function press(button) {
-    const base = { bubbles: true, cancelable: true, composed: true, button: 0, buttons: 1 };
-    const pointer = { ...base, pointerId: 1, pointerType: "mouse", isPrimary: true };
-    button.dispatchEvent(new PointerEvent("pointerdown", pointer));
-    button.dispatchEvent(new MouseEvent("mousedown", base));
-    button.dispatchEvent(new PointerEvent("pointerup", { ...pointer, buttons: 0 }));
-    button.dispatchEvent(new MouseEvent("mouseup", { ...base, buttons: 0 }));
-    button.click();
   }
 
   const RETRY_PAUSES = [3000, 8000]; // après un message d'erreur du site (réseau, trop de requêtes…)
@@ -382,14 +406,12 @@
       const button = dom.openButton();
       if (!button || button.disabled) continue; // regrisé entre-temps : on attend de nouveau
       log(`ouverture du paquet ${job.total - job.left + 1} / ${job.total}` + (attempt ? ` (essai ${attempt + 1})` : ""));
-      button.click();
-      let opened = await waitActive(job, () => !!dom.reveal(), 1500);
-      if (!opened && !job.abort && !dom.sanction() && !dom.packError()) {
-        log("pas de réaction au clic : essai avec un appui complet");
-        const again = dom.openButton();
-        if (again && !again.disabled) press(again);
-        opened = await waitActive(job, () => !!dom.reveal(), 6000);
+      try {
+        await act.click(button, "bouton « Ouvrir »");
+      } catch (e) {
+        return endChain(job, `Ouverture impossible : ${e.message}.`, true);
       }
+      const opened = await waitActive(job, () => !!dom.reveal(), 8000);
       if (job.abort) return;
       if (opened) {
         job.left--; // le défilement prend le relais et rappellera chainNext
@@ -404,17 +426,18 @@
         note(`Le site n'a pas ouvert le paquet (« ${error} ») : nouvel essai dans quelques secondes.`, "warn", null, 10000);
         continue;
       }
-      // Aucune réaction (ou erreurs répétées) : on ne force rien, c'est à toi de cliquer
-      // (ton appui relance l'enchaînement).
-      const target = dom.openButton();
-      if (target) target.focus();
+      // Aucune réaction (ou erreurs répétées) : on n'insiste pas.
       return endChain(job, "Le site n'a pas ouvert le paquet suivant" + (error ? ` (« ${error} »)` : "") +
-        " : clique sur « Ouvrir » (ou appuie sur Entrée) pour continuer.", true);
+        " : enchaînement arrêté. Clique sur « Ouvrir » pour le relancer.", true);
     }
   }
 
   function endChain(job, message, sticky = false) {
     if (chain === job) chain = null;
+    if (job.held) {
+      job.held = false;
+      release();
+    }
     if (message) {
       log(message);
       note(message, message.startsWith("✓") ? "ok" : "warn", null, sticky ? 0 : 15000);
@@ -427,7 +450,8 @@
     if (orphaned || !config || !config.settings.autoReveal || !config.settings.autoChain) return; // config pas encore chargée
     const live = dom.packs();
     const total = Math.max(1, live ? live.count : 1);
-    chain = { abort: false, left: total - 1, total };
+    const job = (chain = { abort: false, left: total - 1, total, held: true });
+    hold().catch((e) => endChain(job, `Enchaînement impossible : ${e.message}`, true));
     log(`enchaînement lancé : ${plural(total, "paquet")} disponible${total > 1 ? "s" : ""}`);
     note(null);
     renderAuto();
@@ -435,8 +459,10 @@
 
   function stopAll(message) {
     pauseShown = false;
-    if (chain) chain.abort = true;
-    chain = null;
+    if (chain) {
+      chain.abort = true;
+      endChain(chain, null);
+    }
     if (autoRun) {
       autoRun.abort = true;
       autoStopped = true;
@@ -450,41 +476,26 @@
 
   const onOpenButton = (el) => route === "pulls" && el instanceof Element && dom.isOpenButton(el.closest("button"));
   const fromPanel = (e) => !!ui && e.composedPath().includes(ui.host);
-  /** Clic dans une fenêtre du site (ajoutée à <body>, hors de la page principale) : annonce, toast… */
-  function inSitePopup(e) {
-    const main = document.querySelector("main");
-    const top = e.composedPath().find((n) => n instanceof Element && n.parentElement === document.body);
-    return !!main && !!top && !top.contains(main);
-  }
-  // Fermer une fenêtre du site (clic dessus ou Échap) n'est pas une reprise en main.
-  const handsOff = (e) => dom.blockingDialog() || inSitePopup(e);
-  // Touches qui ne sont pas une saisie (Alt+Tab, Ctrl, Windows, volume…) : elles n'arrêtent rien.
-  const SILENT_KEYS = /^(Shift|Control|Alt|AltGraph|Meta|OS|Super|Hyper|Fn|FnLock|CapsLock|NumLock|ScrollLock|Audio.*|Media.*|Launch.*|Browser.*|Unidentified)$/;
 
-  // Appui souris (pas les mouvements) : sur « Ouvrir », (re)lance l'enchaînement ; ailleurs, tu
-  // reprends la main. On écoute l'appui en phase de capture : le site peut ouvrir le paquet dès
-  // l'appui et remplacer l'écran aussitôt, auquel cas le « click » n'arriverait jamais.
+  // Ton appui sur « Ouvrir » (souris, ou Entrée / Espace) (re)lance l'enchaînement. On écoute
+  // l'appui en phase de capture : le site peut ouvrir le paquet dès l'appui et remplacer
+  // l'écran aussitôt. Le reste de tes clics et touches ne change rien : seul le bouton
+  // « Arrêter » du panneau arrête un automatisme (décision du 17/11/2026, nos propres clics
+  // étant aussi « isTrusted », act.ours() les écarte).
   document.addEventListener("pointerdown", (e) => {
-    if (!e.isTrusted || fromPanel(e)) return;
-    if (tagging) return stopTagging();
-    if (selling) return stopSelling();
+    if (!e.isTrusted || act.ours() || fromPanel(e)) return;
     if (onOpenButton(e.target)) {
       stopAll();
-      return startChain();
+      startChain();
     }
-    if ((autoRun || chain) && !handsOff(e)) stopAll("Automatique arrêté : tu as pris la main.");
   }, true);
 
-  // Touche du clavier : Entrée / Espace sur « Ouvrir » (re)lance l'enchaînement ; sinon, arrêt.
   document.addEventListener("keydown", (e) => {
-    if (!e.isTrusted || SILENT_KEYS.test(e.key) || fromPanel(e)) return;
-    if (tagging) return stopTagging();
-    if (selling) return stopSelling();
+    if (!e.isTrusted || act.ours() || fromPanel(e)) return;
     if ((e.key === "Enter" || e.key === " ") && onOpenButton(document.activeElement)) {
       stopAll();
-      return startChain();
+      startChain();
     }
-    if ((autoRun || chain) && !handsOff(e) && !(e.key === "Escape" && pauseShown)) stopAll("Automatique arrêté : tu as pris la main.");
   }, true);
 
   function renderAuto() {
@@ -646,7 +657,7 @@
       subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["class", "disabled"],
     });
     try {
-      action();
+      await action();
       await until(job, () => seen || dom.collectionLoading() || failed(), 20000, `${what} : le site n'a pas rechargé la collection.`);
       if (!seen && !dom.collectionLoading()) return false; // erreur affichée par le site
       await waitIdle(job);
@@ -704,24 +715,10 @@
     }
     await wait(job, Math.max(300, +config.settings.pageDelay || 1000));
     if (job.abort) throw new Aborted();
-    await reloadAfter(job, () => button.click(), `Page ${target}`);
+    await reloadAfter(job, () => act.click(button, `bouton « ${dir > 0 ? "Suivant" : "Précédent"} »`), `Page ${target}`);
     const now = pageInfo();
     if (now.page !== target) throw new Error(`la page ${target} ne s'est pas affichée (page ${now.page} à la place).`);
     return now;
-  }
-
-  /** Saisit `value` dans un champ contrôlé par React (setter natif + événement input). */
-  function typeInto(input, value) {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-    input.focus();
-    setter.call(input, String(value));
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-
-  function pressEnter(el) {
-    for (const type of ["keydown", "keyup"]) {
-      el.dispatchEvent(new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-    }
   }
 
   /**
@@ -732,16 +729,15 @@
     await waitIdle(job);
     const p = pageInfo();
     if (!p.jump || target > p.total) return null;
-    p.jump.click();
+    await act.click(p.jump, "bouton « Page X / Y »");
     if (!(await waitFor(job, () => !!dom.pageInput(), 3000))) {
       if (job.abort) throw new Aborted();
       return null;
     }
     await step(job);
-    const input = dom.pageInput();
-    typeInto(input, target);
+    await act.type(dom.pageInput(), target, "champ « Aller à la page »");
     await step(job);
-    await reloadAfter(job, () => pressEnter(dom.pageInput() || input), `Page ${target}`);
+    await reloadAfter(job, () => act.key("Enter"), `Page ${target}`);
     return pageInfo();
   }
 
@@ -770,26 +766,28 @@
     await waitIdle(job);
     const b = dom.selectButton();
     if (!b) throw new Error("bouton « Sélectionner » introuvable : recharge la page (F5).");
-    b.click();
+    await act.click(b, "bouton « Sélectionner »");
     await until(job, () => !!dom.quitSelectionButton(), 5000, "le mode sélection ne s'est pas activé.");
   }
 
   /** Annule une confirmation, ferme la fenêtre d'étiquetage et quitte le mode sélection (aussi après un arrêt). */
   async function leaveSelection() {
     const job = { abort: false };
+    const warn = (e) => log("nettoyage :", e.message);
     const dialog = dom.discardDialog();
     if (dialog && dialog.cancel) {
-      dialog.cancel.click(); // jamais « Défausser » ici : on annule
+      await act.click(dialog.cancel, "bouton « Annuler »").catch(warn); // jamais « Défausser » ici : on annule
       await waitFor(job, () => !dom.discardDialog(), 3000);
     }
     const modal = dom.tagModal();
-    if (modal) {
-      (modal.done || modal.close)?.click();
+    const close = modal && (modal.done || modal.close);
+    if (close) {
+      await act.click(close, "fermeture de la fenêtre d'étiquetage").catch(warn);
       await waitFor(job, () => !dom.tagModal(), 3000);
     }
     const quit = dom.quitSelectionButton();
     if (quit) {
-      quit.click();
+      await act.click(quit, "bouton « Quitter la sélection »").catch(warn);
       await waitFor(job, () => !!dom.selectButton(), 5000);
     }
   }
@@ -820,7 +818,10 @@
     const colors = {};
     note(null);
     renderPanel();
+    let held = false;
     try {
+      await hold();
+      held = true;
       await waitIdle(job);
       let p = pageInfo();
       const grab = () => {
@@ -855,6 +856,7 @@
       if (e instanceof Aborted) note("Analyse arrêtée.", "warn");
       else note(`Analyse interrompue : ${e.message}`, "err");
     } finally {
+      if (held) release();
       scanning = null;
       if (ui) {
         ui.progress.hidden = true;
@@ -888,7 +890,7 @@
     for (const item of items) {
       const card = findCard(item);
       if (!card) continue;
-      card.h3.click();
+      await act.click(card.h3, `carte « ${item.title} »`);
       clicked++;
       await step(job);
     }
@@ -906,7 +908,7 @@
       return true;
     }
     const selected = bar.count;
-    bar.tag.click();
+    await act.click(bar.tag, "bouton « Étiqueter »");
     await until(job, () => {
       const m = dom.tagModal();
       return m && !m.loading && m.tags.size > 0;
@@ -918,7 +920,7 @@
     }
     await step(job);
     // Le clic pose l'étiquette, affiche « N cartes étiquetées » et recharge la collection.
-    const posed = await reloadAfter(job, () => button.click(), `« ${tag} »`, () => !!(dom.tagModal() && dom.tagModal().error));
+    const posed = await reloadAfter(job, () => act.click(button, `étiquette « ${tag} »`), `« ${tag} »`, () => !!(dom.tagModal() && dom.tagModal().error));
     const m = dom.tagModal();
     if (!posed || (m && m.error)) throw new Error(`le site n'a pas posé « ${tag} »${m && m.error ? ` : ${m.error}` : ""}.`);
     stats.applied += m && m.added != null ? m.added : selected;
@@ -959,7 +961,7 @@
   function stopTagging() {
     if (!tagging || tagging.abort) return;
     tagging.abort = true;
-    log("étiquetage arrêté : tu as pris la main");
+    log("étiquetage arrêté depuis le panneau");
   }
 
   async function runAutoTag(ignoreFilters = false, fromStart = false) {
@@ -979,7 +981,10 @@
     note(null);
     renderPanel();
     ui.progress.hidden = false;
+    let held = false;
     try {
+      await hold();
+      held = true;
       await leaveSelection();
       await waitIdle(job);
       let p = pageInfo();
@@ -1002,6 +1007,7 @@
       else note(`Étiquetage interrompu : ${e.message} ${tagSummary(stats)}`, "err");
     } finally {
       await leaveSelection();
+      if (held) release();
       tagging = null;
       if (ui) {
         ui.progress.hidden = true;
@@ -1027,11 +1033,11 @@
     const b = dom.tagFilterButton();
     if (!b) throw new Error("filtre d'étiquette introuvable.");
     if (dom.clean(b.textContent) === label) return;
-    b.click();
+    await act.click(b, "filtre d'étiquette");
     await until(job, () => dom.tagFilterOptions().has(label), 5000, `option « ${label} » introuvable dans le filtre d'étiquette.`);
     await step(job);
     const option = dom.tagFilterOptions().get(label);
-    await reloadAfter(job, () => option.click(), `Filtre « ${label} »`);
+    await reloadAfter(job, () => act.click(option, `option « ${label} »`), `Filtre « ${label} »`);
     if (dom.clean(dom.tagFilterButton().textContent) !== label) throw new Error(`le filtre « ${label} » ne s'est pas appliqué.`);
   }
 
@@ -1039,7 +1045,7 @@
     for (const r of RARITY_ORDER) {
       const chip = dom.rarityChips().get(r);
       if (!chip || chip.on === wanted.has(r)) continue;
-      await reloadAfter(job, () => chip.button.click(), `Filtre de rareté ${r}`);
+      await reloadAfter(job, () => act.click(chip.button, `filtre de rareté ${r}`), `Filtre de rareté ${r}`);
       if (dom.rarityChips().get(r).on !== wanted.has(r)) throw new Error(`le filtre de rareté ${r} ne s'est pas appliqué.`);
     }
   }
@@ -1048,19 +1054,19 @@
     await enterSelection(job);
     const first = findCard(sell[0]);
     if (!first) throw new Error("carte introuvable après le passage en mode sélection.");
-    first.h3.click();
+    await act.click(first.h3, `carte « ${sell[0].title} »`);
     await until(job, () => !!dom.selectionBar(), 5000, "barre de sélection introuvable.");
     await step(job);
     const all = dom.barButton(dom.selectionBar(), /^Tout sélectionner/);
     if (all) {
-      all.click();
+      await act.click(all, "bouton « Tout sélectionner (page) »");
       await step(job, 300);
     }
     for (const c of kept) {
       if (dom.pendingTrade(c)) continue; // déjà exclue par le site
       const cur = findCard(c);
       if (cur) {
-        cur.h3.click();
+        await act.click(cur.h3, `carte « ${c.title} »`);
         await step(job);
       }
     }
@@ -1075,20 +1081,20 @@
     if (offered !== sell.length) {
       throw new Error(`le site défausserait ${offered} cartes au lieu de ${sell.length} (carte verrouillée non reconnue ?) : rien n'a été vendu.`);
     }
-    discard.click();
+    await act.click(discard, "bouton « Défausser »");
     await until(job, () => !!dom.discardDialog(), 5000, "confirmation de défausse introuvable.");
     const dialog = dom.discardDialog();
     if (dialog.count !== sell.length || !dialog.confirm) {
-      if (dialog.cancel) dialog.cancel.click();
+      if (dialog.cancel) await act.click(dialog.cancel, "bouton « Annuler »").catch(() => {});
       throw new Error(`le site propose de défausser ${dialog.count} cartes au lieu de ${sell.length} : annulé.`);
     }
     await step(job, 300);
     if (job.abort) throw new Aborted(); // dernier moment pour s'arrêter avant la vente
     // La confirmation défausse les cartes, ferme la fenêtre et recharge la collection.
-    const sold = await reloadAfter(job, () => dialog.confirm.click(), "Défausse", () => !!(dom.discardDialog() && dom.discardDialog().error));
+    const sold = await reloadAfter(job, () => act.click(dialog.confirm, "confirmation « Défausser »"), "Défausse", () => !!(dom.discardDialog() && dom.discardDialog().error));
     if (!sold) {
       const refused = dom.discardDialog();
-      if (refused && refused.cancel) refused.cancel.click();
+      if (refused && refused.cancel) await act.click(refused.cancel, "bouton « Annuler »").catch(() => {});
       throw new Error(`le site a refusé la défausse : ${(refused && refused.error) || "pas de réponse"}.`);
     }
     const n = dom.discardedMessage();
@@ -1113,7 +1119,7 @@
   function stopSelling() {
     if (!selling || selling.abort) return;
     selling.abort = true;
-    log("vente arrêtée : tu as pris la main");
+    log("vente arrêtée depuis le panneau");
   }
 
   async function runSell() {
@@ -1127,7 +1133,10 @@
     renderPanel();
     ui.progress.hidden = false;
     ui.bar.style.width = "0%";
+    let held = false;
     try {
+      await hold();
+      held = true;
       await leaveSelection();
       ui.ptext.textContent = "Filtres « Sans étiquette » et raretés…";
       await setTagFilter(job, "Sans étiquette");
@@ -1173,6 +1182,7 @@
       } catch (e) {
         log("filtres non remis à zéro :", e.message);
       }
+      if (held) release();
       selling = null;
       if (ui) {
         ui.progress.hidden = true;
@@ -1543,6 +1553,15 @@
   }
 
   chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+    if (msg && msg.type === "driveDetached") {
+      act.resetScale();
+      holds = 0;
+      if (scanning) scanning.abort = true;
+      if (tagging) tagging.abort = true;
+      if (selling) selling.abort = true;
+      if (autoRun || chain) stopAll();
+      if (msg.reason === "canceled_by_user") note("Bandeau de débogage fermé : automatique arrêté (il en a besoin pour cliquer).", "warn", null, 15000);
+    }
     if (msg && msg.type === "panel") {
       if (route) setOpen(true);
       reply({ ok: !!route });

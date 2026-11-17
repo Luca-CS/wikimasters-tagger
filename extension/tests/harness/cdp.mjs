@@ -2,7 +2,7 @@
 // - modes d'enchaînement : VRAIS clics souris / touches (Input.dispatch*), seuls à être « isTrusted » ;
 // - mode selftest : ouvre la page d'auto-test de l'extension chargée (alarmes, badge, notifications).
 // Usage : node cdp.mjs <port> <url> <mode>
-//   modes : page | normal | robot | takeover | move | alt | toast | sanction | trustedonly | selftest
+//   modes : page | normal | robot | takeover | stop | move | alt | toast | sanction | trustedonly | selftest
 //   (page : attend le résultat que le scénario de la page écrit dans <pre id="wmt-out">)
 // Écrit un objet JSON sur stdout (analysé par run.py).
 const [port, url, mode] = process.argv.slice(2);
@@ -45,17 +45,38 @@ let page = null;
 try {
   await http("/json/version");
   let target = url;
+  let tab = null;
   if (mode === "selftest") {
-    // Identifiant de l'extension chargée : celui de son service worker.
-    let sw = null;
-    for (let i = 0; i < 40 && !sw; i++) {
-      sw = (await http("/json/list")).find((t) => t.type === "service_worker" && t.url.endsWith("/background.js"));
-      if (!sw) await sleep(250);
+    // Identifiant de l'extension chargée : celui de son service worker. Edge a aussi des
+    // extensions intégrées avec un « background.js » : on essaie chaque candidat et on garde
+    // celui dont la page d'auto-test existe (avant, le premier trouvé était parfois le mauvais).
+    let candidates = [];
+    for (let i = 0; i < 40 && !candidates.length; i++) {
+      candidates = (await http("/json/list")).filter((t) => t.type === "service_worker" && t.url.endsWith("/background.js"));
+      if (!candidates.length) await sleep(250);
     }
-    if (!sw) throw new Error("service worker de l'extension introuvable");
-    target = sw.url.replace("/background.js", "/pages/_selftest.html");
+    for (const sw of candidates) {
+      const t = await http(`/json/new?${encodeURIComponent(sw.url.replace("/background.js", "/pages/_selftest.html"))}`, "PUT");
+      const probe = await connect(t.webSocketDebuggerUrl);
+      // Jusqu'à 8 s pour charger la page (machine chargée : 1,5 s ne suffisait pas toujours).
+      let ours = false;
+      for (let i = 0; i < 32 && !ours; i++) {
+        await sleep(250);
+        const r = await probe.call("Runtime.evaluate", { expression: `!!document.querySelector('script[src="_selftest.js"]') || !!document.getElementById("wmt-out")`, returnByValue: true });
+        ours = !!(r && r.result && r.result.value === true);
+      }
+      if (ours) {
+        tab = t;
+        probe.ws.close();
+        break;
+      }
+      probe.ws.close();
+      await http(`/json/close/${t.id}`).catch(() => {});
+    }
+    if (!tab) throw new Error("service worker de l'extension introuvable");
+  } else {
+    tab = await http(`/json/new?${encodeURIComponent(target)}`, "PUT");
   }
-  const tab = await http(`/json/new?${encodeURIComponent(target)}`, "PUT");
   page = await connect(tab.webSocketDebuggerUrl);
   const { call } = page;
   // Onglet au premier plan et considéré comme actif : sinon Chrome le traite comme masqué
@@ -74,6 +95,36 @@ try {
     }
   });
   await call("Runtime.enable");
+  // Pilote de l'extension (lib/driver.js) rejoué ici : shim.js appelle __wmtDrive, on envoie
+  // les vrais événements à la page et on répond par __wmtDriveReply.
+  out.drive = { clicks: 0, keys: 0, texts: 0 };
+  await call("Runtime.addBinding", { name: "__wmtDrive" });
+  page.ws.addEventListener("message", async (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.method !== "Runtime.bindingCalled" || msg.params.name !== "__wmtDrive") return;
+    const { id, msg: m } = JSON.parse(msg.params.payload);
+    let res = { ok: true, attached: true };
+    try {
+      if (m.op === "click") {
+        out.drive.clicks++;
+        await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: m.x, y: m.y, button: "none", buttons: 0 });
+        await call("Input.dispatchMouseEvent", { type: "mousePressed", x: m.x, y: m.y, button: "left", buttons: 1, clickCount: 1 });
+        await call("Input.dispatchMouseEvent", { type: "mouseReleased", x: m.x, y: m.y, button: "left", buttons: 0, clickCount: 1 });
+      } else if (m.op === "key") {
+        out.drive.keys++;
+        const K = { Enter: [13, "\r"], Escape: [27, ""], Backspace: [8, ""] }[m.key];
+        const base = { key: m.key, code: m.key, windowsVirtualKeyCode: K[0], nativeVirtualKeyCode: K[0] };
+        await call("Input.dispatchKeyEvent", { type: K[1] ? "keyDown" : "rawKeyDown", ...base, ...(K[1] ? { text: K[1], unmodifiedText: K[1] } : {}) });
+        await call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+      } else if (m.op === "text") {
+        out.drive.texts++;
+        await call("Input.insertText", { text: m.text });
+      }
+    } catch (e) {
+      res = { ok: false, error: String(e) };
+    }
+    await call("Runtime.evaluate", { expression: `window.__wmtDriveReply(${JSON.stringify(id)}, ${JSON.stringify(res)})` });
+  });
   const ev = async (expr) => (await call("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result.value;
   const until = async (expr, ms) => {
     const end = Date.now() + ms;
@@ -119,8 +170,22 @@ try {
       await clickOn(`document.getElementById("robot-check")`); // tu valides la vérification
     }
     if (mode === "takeover") {
+      // Tu cliques ailleurs pendant l'enchaînement : il continue (seul « Arrêter » l'arrête).
       await until(`__sim.opens.length >= 2 && !!WMT.dom.reveal() && WMT.dom.reveal().index >= 2`, 60000);
       await clickOn(`[...document.querySelectorAll("main span")].find((s) => s.textContent.trim() === "Carte").parentElement`);
+      await sleep(1000);
+      out.noteJustAfter = await ev(`document.getElementById("wmt-host").shadowRoot.querySelector(".note").textContent`);
+      await until(done, 90000);
+      await sleep(1500);
+    } else if (mode === "stop") {
+      // Bouton « Arrêter » du panneau pendant le 2e paquet (panneau ouvert d'abord : il est
+      // replié en pastille par défaut).
+      await until(`__sim.opens.length >= 2 && !!WMT.dom.reveal() && WMT.dom.reveal().index >= 2`, 60000);
+      if (await ev(`document.getElementById("wmt-host").shadowRoot.querySelector(".panel").hidden`)) {
+        await clickOn(`document.getElementById("wmt-host").shadowRoot.querySelector(".fab")`);
+        await sleep(400);
+      }
+      await clickOn(`[...document.getElementById("wmt-host").shadowRoot.querySelectorAll("button")].find((b) => b.textContent.trim() === "Arrêter" && !b.hidden)`);
       await sleep(1000);
       out.noteJustAfter = await ev(`document.getElementById("wmt-host").shadowRoot.querySelector(".note").textContent`);
       await sleep(9000);
@@ -159,7 +224,7 @@ try {
       await until(done, 90000);
       await sleep(1500);
     }
-    out.sim = await ev(`({ count: __sim.count, opens: __sim.opens.map((o) => (o.trusted ? "humain" : "auto") + ":" + o.type), continues: __sim.continues, robotTrusted: __sim.robotTrusted ?? null })`);
+    out.sim = await ev(`({ count: __sim.count, opens: __sim.opens.map((o) => (o.trusted ? "humain" : "auto") + ":" + o.type), continues: __sim.continues, robotTrusted: __sim.robotTrusted ?? null, ignored: __sim.ignored })`);
     const cards = await ev(`__sim.cards`);
     out.cardDelaysMs = cards.slice(1).map((c, i) => (c.card === 1 ? null : `${cards[i].rarity}:${c.t - cards[i].t}`)).filter(Boolean);
     out.panel = await panel();

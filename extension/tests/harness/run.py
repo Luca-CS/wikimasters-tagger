@@ -131,7 +131,9 @@ def opens(out):
 
 
 CHAIN_DONE = lambda o: [  # noqa: E731
-    ("3 paquets ouverts : ton clic + 2 automatiques", len(opens(o)) == 3 and opens(o)[0].startswith("humain") and all(x.startswith("auto") for x in opens(o)[1:])),
+    # Tous les clics sont de vrais clics (isTrusted) : le tien, puis 2 envoyés par le pilote.
+    ("3 paquets ouverts : ton clic + 2 par le pilote", len(opens(o)) == 3 and all(x.startswith("humain") for x in opens(o))
+     and (o.get("drive") or {}).get("clicks", 0) >= 2),
     ("enchaînement terminé", any("Enchaînement terminé" in t for t in o.get("panel", []))),
 ]
 
@@ -197,8 +199,11 @@ SCENARIOS = [
         ("aucune ouverture pendant la vérification", o.get("opensWhileRobot") == 1),
         ("validée par toi, puis enchaînement terminé", (o.get("sim") or {}).get("robotTrusted") is True and len(opens(o)) == 3),
     ]),
-    ("chain-takeover", "cdp", "/pulls/?state=chain", "takeover", lambda o: [
-        ("arrêt quand tu cliques ailleurs", len(opens(o)) == 2 and "pris la main" in (o.get("noteJustAfter") or "")),
+    ("chain-takeover", "cdp", "/pulls/?state=chain", "takeover", lambda o: CHAIN_DONE(o) + [
+        ("ton clic ailleurs ne l'arrête pas", "pris la main" not in (o.get("noteJustAfter") or "")),
+    ]),
+    ("chain-stop", "cdp", "/pulls/?state=chain", "stop", lambda o: [
+        ("« Arrêter » du panneau arrête l'enchaînement", len(opens(o)) == 2 and "arrêté" in (o.get("noteJustAfter") or "")),
         ("message effacé tout seul", o.get("noteAfter10s") == ""),
     ]),
     ("chain-popup", "cdp", "/pulls/?state=chain&popup", "normal", lambda o: CHAIN_DONE(o) + [
@@ -212,10 +217,9 @@ SCENARIOS = [
     ]),
     ("chain-move", "cdp", "/pulls/?state=chain", "move", lambda o: [("mouvements du curseur sans effet", len(opens(o)) == 3)]),
     ("chain-alt", "cdp", "/pulls/?state=chain", "alt", lambda o: [("touche Alt seule sans effet", len(opens(o)) == 3)]),
-    ("chain-trustedonly", "cdp", "/pulls/?state=chain&trustedonly", "trustedonly", lambda o: [
-        ("aucun forçage : message et bouton en focus", (o.get("afterFirst") or {}).get("focused") is True
-            and any("clique sur « Ouvrir »" in t for t in (o.get("afterFirst") or {}).get("panel", []))),
-        ("ton Entrée relance", (o.get("afterEnter") or {}).get("opens", [])[:2] == [True, True]),
+    # Site qui n'accepte que les vrais clics (isTrusted) : le pilote enchaîne quand même.
+    ("chain-trustedonly", "cdp", "/pulls/?state=chain&trustedonly", "normal", lambda o: CHAIN_DONE(o) + [
+        ("aucun clic refusé par le site", (o.get("sim") or {}).get("ignored", 0) == 0),
     ]),
     ("service-worker", "selftest", None, "selftest", lambda o: [
         ("badge et alarme « plein » (gratuit : 24 min)", o.get("free", {}).get("badge") == "7"

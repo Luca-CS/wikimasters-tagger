@@ -650,6 +650,23 @@
 
   const pilotOn = () => !!(config && config.settings.autoOpen) && !orphaned;
 
+  // Un seul onglet pilote : deux onglets sur la page Paquets ouvriraient chacun des paquets.
+  // Verrou {id, at} dans le stockage, renouvelé à chaque vérification, libre après 15 s.
+  const PILOT_ID = Math.random().toString(36).slice(2);
+  const PILOT_LOCK_MS = 15000;
+  let pilotLock = null;
+  store.get("pilotLock").then((v) => (pilotLock = v || null), () => {});
+  store.onChange((ch) => {
+    if (ch.pilotLock) pilotLock = ch.pilotLock.newValue || null;
+  });
+  async function pilotClaim() {
+    const now = Date.now();
+    if (pilotLock && pilotLock.id !== PILOT_ID && now - pilotLock.at < PILOT_LOCK_MS) return false;
+    pilotLock = { id: PILOT_ID, at: now };
+    await safe(() => store.set("pilotLock", pilotLock));
+    return true;
+  }
+
   /** Retient une carte tirée qui a des étiquettes à poser. */
   function pilotRemember(card, matches) {
     if (!pilotOn() || !config.settings.autoTagPulled || !matches.length) return;
@@ -722,6 +739,7 @@
     if (!live) return;
     pilotBusy = true;
     try {
+      if (!(await pilotClaim())) return; // un autre onglet pilote déjà
       if (live.count < 1) {
         if (config.settings.autoTagPulled && pilot.pending.length) await pilotGo("/collection");
         return;
@@ -1179,6 +1197,7 @@
   function stopTagging() {
     if (!tagging || tagging.abort) return;
     tagging.abort = true;
+    if (tagging.pilot) stopPilot("Pilote arrêté.");
     log("étiquetage arrêté depuis le panneau");
   }
 

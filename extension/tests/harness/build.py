@@ -39,7 +39,10 @@ def strip_site(html: str) -> str:
         html = html.split("\n", 1)[1]
     html = re.sub(r"<script\b[^>]*>.*?</script>", "", html, flags=re.S | re.I)
     html = re.sub(r"<link[^>]+(preload|modulepreload)[^>]*>", "", html)
-    return re.sub(r'<link[^>]+rel="stylesheet"[^>]*>', "", html)
+    html = re.sub(r'<link[^>]+rel="stylesheet"[^>]*>', "", html)
+    # Images de l'export (non copiées) : des dizaines de 404 par page saturaient le serveur de
+    # test, au point qu'un script de l'extension manquait parfois. Image vide à la place.
+    return re.sub(r'(<img\b[^>]*?\s)src="\./[^"]*"', r'\1src="data:,"', html)
 
 
 def css_links(css_files) -> str:

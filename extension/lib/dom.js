@@ -17,11 +17,14 @@
   const text = (el) => clean(el.textContent);
   const leaf = (el) => el.childElementCount === 0;
 
-  /** Pagination : {page, total, prev, next, bar} ou null. */
+  /**
+   * Pagination : {page, total, prev, next, jump, bar} ou null. Depuis novembre 2026, « Page X / Y »
+   * est un bouton (title « Aller à la page… ») qui ouvre un champ numérique : `jump`.
+   */
   function pager(doc = document) {
     const scope = doc.querySelector("main") || doc.body;
     if (!scope) return null;
-    for (const el of scope.querySelectorAll("span, div, p")) {
+    for (const el of scope.querySelectorAll("button, span, div, p")) {
       if (!leaf(el)) continue;
       const m = text(el).match(PAGE);
       if (!m) continue;
@@ -33,10 +36,14 @@
         bar,
         prev: buttons.find((b) => /Précédent/i.test(text(b))) || null,
         next: buttons.find((b) => /Suivant/i.test(text(b))) || null,
+        jump: el.tagName === "BUTTON" ? el : null,
       };
     }
     return null;
   }
+
+  /** Champ « Aller à la page » ouvert par le bouton « Page X / Y », sinon null. */
+  const pageInput = (doc = document) => doc.querySelector('main input[aria-label="Aller à la page"]');
 
   // Carte shiny (relevé du 02/10/2026) : le badge n'est pas une feuille,
   // <div class="shiny-badge …">L<span>✦</span><span class="sr-only"> shiny</span></div>.
@@ -237,8 +244,13 @@
     return out;
   }
 
-  /** Carte en favori (étoile « Retirer des favoris », masquée en mode sélection). */
-  const isStarred = (card) => !!card.root.querySelector('button[aria-label="Retirer des favoris"]');
+  /**
+   * Carte en favori. Depuis novembre 2026 un favori est verrouillé (ni défausse, ni vente, ni
+   * échange) : étoile « Retirer des favoris (déverrouille la carte) » hors mode sélection,
+   * mention « Verrouillée (favori) » en mode sélection (l'étoile y est masquée).
+   */
+  const isStarred = (card) =>
+    !!card.root.querySelector('button[aria-label^="Retirer des favoris"]') || /Verrouillée \(favori\)/.test(text(card.root));
   /** Carte engagée dans un échange (non sélectionnable). */
   const pendingTrade = (card) => /Échange en attente/.test(text(card.root));
 
@@ -403,10 +415,14 @@
     return el ? text(el).slice(0, 160) : "";
   }
 
-  /** Sanction affichée par la page Paquets (activités restreintes). */
+  /**
+   * Sanction affichée (activités restreintes) : « Sanction … active », « Sanction temporaire
+   * sur l'ouverture de paquets », ou l'encadré « Compte suspendu » de la page Paquets.
+   */
+  const SANCTION = /\bsanction\b[^.\n]{0,30}\bactive\b|^sanction temporaire|^compte suspendu/i;
   function sanction(doc = document) {
     for (const el of doc.querySelectorAll("p, div, span")) {
-      if (leaf(el) && /\bsanction\b[^.\n]{0,30}\bactive\b/i.test(text(el)) && shown(el)) return true;
+      if (leaf(el) && SANCTION.test(text(el)) && shown(el)) return true;
     }
     return false;
   }
@@ -427,7 +443,7 @@
   }
 
   WMT.dom = {
-    clean, isShinyBadge, pager, cardElements, readCard, cards, activeFilters, hexColor,
+    clean, isShinyBadge, pager, pageInput, cardElements, readCard, cards, activeFilters, hexColor,
     selectButton, quitSelectionButton, selectionBar, tagModal,
     collectionLoading, tagFilterButton, tagFilterOptions, rarityChips, isStarred, pendingTrade, barButton, discardDialog, discardedMessage, emptyResult,
     packs, parseDuration, reveal, revealNav, isOpenButton, openButton, overlay, blockingDialog, blockingText,

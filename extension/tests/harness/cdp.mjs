@@ -58,9 +58,14 @@ try {
     for (const sw of candidates) {
       const t = await http(`/json/new?${encodeURIComponent(sw.url.replace("/background.js", "/pages/_selftest.html"))}`, "PUT");
       const probe = await connect(t.webSocketDebuggerUrl);
-      await sleep(1500);
-      const r = await probe.call("Runtime.evaluate", { expression: `!!document.querySelector('script[src="_selftest.js"]') || !!document.getElementById("wmt-out")`, returnByValue: true });
-      if (r && r.result && r.result.value === true) {
+      // Jusqu'à 8 s pour charger la page (machine chargée : 1,5 s ne suffisait pas toujours).
+      let ours = false;
+      for (let i = 0; i < 32 && !ours; i++) {
+        await sleep(250);
+        const r = await probe.call("Runtime.evaluate", { expression: `!!document.querySelector('script[src="_selftest.js"]') || !!document.getElementById("wmt-out")`, returnByValue: true });
+        ours = !!(r && r.result && r.result.value === true);
+      }
+      if (ours) {
         tab = t;
         probe.ws.close();
         break;

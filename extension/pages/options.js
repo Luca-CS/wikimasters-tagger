@@ -59,6 +59,7 @@ function ruleEditor(key, i, open) {
   const tkw = $("textarea", { rows: 7, spellcheck: "false" });
   kw.value = (rule.keywords || []).join("\n");
   tkw.value = (rule.titleKeywords || []).join("\n");
+  const crossBox = $("input", { type: "checkbox", class: "switch", checked: !!rule.cross });
 
   const details = $("details", { class: "rule", "data-i": String(i), open },
     $("summary", {}, dot, label, count),
@@ -77,6 +78,10 @@ function ruleEditor(key, i, open) {
         : $("div", { class: "cols" },
           $("label", {}, "Mots-clés cherchés dans la description, la précision du titre entre parenthèses (et Wikidata), un par ligne", kw),
           $("label", {}, "Mots-clés cherchés dans le titre", tkw)),
+      isTheme || rule.shiny ? null : $("label", { class: "field inline" },
+        $("span", {}, "Transversale", $("br"),
+          $("small", {}, "Posée en plus de la catégorie, même sur une carte déjà étiquetée, sans compter comme catégorie. Seulement sur les indices de la carte (pas Wikidata).")),
+        crossBox),
       isTheme ? null : $("div", { class: "d" },
         rule.colorLocked ? "Couleur choisie à la main." : "Couleur reprise automatiquement du jeu dès que l'étiquette apparaît sur une carte."),
       err));
@@ -108,6 +113,7 @@ function ruleEditor(key, i, open) {
   color.addEventListener("input", () => update(isTheme ? { color: color.value } : { color: color.value, colorLocked: true }));
   kw.addEventListener("input", () => update({ keywords: lines(kw.value) }));
   tkw.addEventListener("input", () => update({ titleKeywords: lines(tkw.value) }));
+  crossBox.addEventListener("change", () => update({ cross: crossBox.checked }));
   refreshHead();
   return details;
 }
@@ -287,6 +293,76 @@ function bindData() {
   });
 }
 
+// --- Marché : collecte de données (lecture seule) ----------------------------------------
+
+const KIND = { list: "nouvelles annonces", detail: "résultat d'enchère", sales: "historique de prix" };
+const fmtTime = (t) => new Date(t).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+
+const marketState = async () => ({ ...WMT.market.DEFAULTS, ...(await store.get("market", {})) });
+
+async function saveMarket(patch) {
+  await store.set("market", { ...(await marketState()), ...patch });
+}
+
+async function renderMarket() {
+  const s = await marketState();
+  const now = Date.now();
+  byId("mk-on").checked = s.on;
+  for (const [id, v] of [["mk-every", s.everySec], ["mk-cap", s.dailyCap], ["mk-share", Math.round(s.pRest * 100)], ["mk-h0", s.hours[0]], ["mk-h1", s.hours[1]]]) {
+    if (document.activeElement !== byId(id)) byId(id).value = v;
+  }
+  let st = null;
+  try {
+    st = await WMT.marketdb.stats();
+  } catch (e) {
+    byId("mk-status").textContent = `Données illisibles : ${e.message}`;
+    return;
+  }
+  const used = s.today && s.today.day === WMT.market.dayKey(now) ? s.today.n : 0;
+  const gate = WMT.market.canRequest(s, now);
+  const state = !s.on ? "arrêtée"
+    : gate.why === "pause" ? `en pause jusqu'à ${fmtDate(s.backoffUntil)}`
+    : gate.why === "hours" ? `en veille (heures actives ${s.hours[0]} h – ${s.hours[1]} h)`
+    : gate.why === "cap" ? "quota du jour atteint"
+    : "active";
+  byId("mk-badge").textContent = `${st.done} enchères terminées`;
+  byId("mk-status").textContent =
+    `Collecte ${state}. Aujourd'hui : ${used} / ${s.dailyCap} requêtes. ` +
+    `Enchères suivies : ${st.waiting} en attente de leur fin, ${st.done} terminées, ${st.gone} introuvables. ` +
+    `Historiques de prix : ${st.cards} cartes (${st.todo} à lire).` +
+    (s.lastError ? ` Dernier problème : ${s.lastError}` : "");
+  byId("mk-log").replaceChildren(
+    ...st.last.map((l) => $("tr", {}, $("td", {}, fmtTime(l.t)), $("td", {}, KIND[l.kind] || l.kind), $("td", {}, l.status ? `HTTP ${l.status}` : "pas de réponse"), $("td", {}, `${(l.ms / 1000).toFixed(1).replace(".", ",")} s`))),
+  );
+}
+
+function bindMarket() {
+  // Relancer efface le dernier message ; une pause de 24 h en cours reste respectée.
+  byId("mk-on").addEventListener("change", (e) => saveMarket(e.target.checked ? { on: true, lastError: null } : { on: false }).then(renderMarket));
+  const num = (id, min, max, apply) => byId(id).addEventListener("change", async (e) => {
+    const v = Math.round(Number(e.target.value));
+    if (!Number.isFinite(v)) return renderMarket();
+    await saveMarket(apply(Math.min(max, Math.max(min, v)), await marketState()));
+    renderMarket();
+  });
+  num("mk-every", 30, 600, (v) => ({ everySec: v }));
+  num("mk-cap", 50, 5000, (v) => ({ dailyCap: v }));
+  num("mk-share", 1, 100, (v) => ({ pRest: v / 100 }));
+  num("mk-h0", 0, 23, (v, s) => ({ hours: [v, Math.max(v + 1, s.hours[1])] }));
+  num("mk-h1", 1, 24, (v, s) => ({ hours: [Math.min(s.hours[0], v - 1), v] }));
+  byId("mk-export").addEventListener("click", async () => {
+    const out = byId("mk-result");
+    out.textContent = "Export…";
+    const res = await chrome.runtime.sendMessage({ type: "marketExport" }).catch((e) => ({ ok: false, error: e.message }));
+    out.textContent = res && res.ok ? "✓ Enregistré dans Téléchargements/wikimasters-marche/collecte.json" : `✗ ${(res && res.error) || "pas de réponse"}`;
+  });
+  byId("mk-clear").addEventListener("click", async () => {
+    if (!confirm("Supprimer toutes les données collectées sur le marché ?")) return;
+    await WMT.marketdb.clear();
+    renderMarket();
+  });
+}
+
 // --- Démarrage ---------------------------------------------------------------------------
 
 function renderAll() {
@@ -310,6 +386,9 @@ async function init() {
   renderDataInfo();
   renderPacksInfo();
   setInterval(renderPacksInfo, 30000);
+  bindMarket();
+  renderMarket();
+  setInterval(() => document.hidden || renderMarket(), 5000);
   store.onChange(async (ch) => {
     if (ch.scanMeta || ch.wd) renderDataInfo();
     if (ch.packs || ch.config) renderPacksInfo();

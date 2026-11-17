@@ -66,7 +66,12 @@
       await until(() => window.__applied.some((a) => a.page === 2), 140000);
       btn(/Arrêter l'étiquetage/).click();
       out.stopped = await until(() => /Étiquetage arrêté/.test(shadow().querySelector(".note").textContent), 30000);
-      await sleep(500);
+      // Le bouton ne réapparaît qu'une fois le mode sélection quitté (plus lent à 150 %).
+      await until(() => {
+        const b = btn(/^(Reprendre|Étiqueter toute)/);
+        return b && !b.hidden;
+      }, 30000);
+      await sleep(300);
       out.resumeLabel = btn(/^(Reprendre|Étiqueter toute)/).textContent;
       // Tu es allé voir la page 4 entre-temps : la reprise doit sauter directement à la page 2.
       window.__showPage(4);

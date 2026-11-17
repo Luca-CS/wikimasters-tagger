@@ -227,6 +227,28 @@
   // sélection vidée, liste rechargée (les cartes suivantes remontent sur la même page).
 
   const tagFilterButton = (doc = document) => doc.querySelector('button[aria-label="Filtrer par étiquette"]');
+  /** Tri de la collection : même liste déroulante que le filtre (Rareté, Nom, Favoris, Date d'ajout). */
+  const sortButton = (doc = document) => doc.querySelector('button[aria-label="Trier la collection"]');
+
+  /**
+   * Lien de navigation du site vers `path` (« /collection », « /pulls »), le premier affiché :
+   * la barre latérale ou la barre du bas selon la largeur de la fenêtre.
+   */
+  function navLink(path, doc = document) {
+    const origin = doc.defaultView ? doc.defaultView.location.origin : "";
+    for (const a of doc.querySelectorAll("a[href]")) {
+      let url = null;
+      try {
+        url = new URL(a.href, doc.baseURI);
+      } catch {
+        continue;
+      }
+      // Même site seulement (navigation interne), jamais un lien vers ailleurs.
+      if (url.origin !== origin) continue;
+      if (url.pathname.replace(/\/+$/, "") === path && shown(a)) return a;
+    }
+    return null;
+  }
 
   /** Options de la liste du filtre d'étiquette ouverte : libellé -> bouton. */
   function tagFilterOptions(doc = document) {
@@ -445,7 +467,7 @@
   WMT.dom = {
     clean, isShinyBadge, pager, pageInput, cardElements, readCard, cards, activeFilters, hexColor,
     selectButton, quitSelectionButton, selectionBar, tagModal,
-    collectionLoading, tagFilterButton, tagFilterOptions, rarityChips, isStarred, pendingTrade, barButton, discardDialog, discardedMessage, emptyResult,
+    collectionLoading, tagFilterButton, sortButton, navLink, tagFilterOptions, rarityChips, isStarred, pendingTrade, barButton, discardDialog, discardedMessage, emptyResult,
     packs, parseDuration, reveal, revealNav, isOpenButton, openButton, overlay, blockingDialog, blockingText,
     sanction, packError, firstSentence,
   };

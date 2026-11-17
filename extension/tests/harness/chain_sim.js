@@ -8,6 +8,9 @@
 //   openerror     la 2e ouverture (1re du pilote) échoue avec « Erreur réseau. Réessayez. »
 //   sanction      après le 1er paquet : « Sanction active », « Ouvrir » grisé
 //   toast         après le 1er paquet : petit toast avec un bouton de fermeture (#toast-close)
+//   pilot         pilote : 2 paquets, état gardé dans sessionStorage (la page est quittée pour la
+//                 Collection puis rechargée), un paquet de plus 10 s après le stock vide ; les
+//                 cartes tirées sont transmises à la Collection de test (__simPulled)
 (function () {
   if (STATE !== "chain") return;
   const DECK = [
@@ -18,7 +21,22 @@
     ["Limahl", "Limahl est un chanteur britannique.", "C"],
   ];
   const m = document.querySelector("main");
-  const sim = (window.__sim = { count: 3, opens: [], cards: [], continues: 0, robotShown: 0, ignored: 0 });
+  const pilot = PARAMS.has("pilot");
+  const saved = pilot && JSON.parse(sessionStorage.getItem("__sim") || "null");
+  const sim = (window.__sim = saved || { count: pilot ? 2 : 3, opens: [], cards: [], continues: 0, robotShown: 0, ignored: 0 });
+  const save = () => pilot && sessionStorage.setItem("__sim", JSON.stringify(sim));
+  if (pilot) {
+    sessionStorage.setItem("__simPilot", "1");
+    // Un paquet de plus 10 s après que le stock est tombé à 0 (une seule fois).
+    setInterval(() => {
+      if (sim.emptyAt && !sim.regenerated && Date.now() - sim.emptyAt > 10000) {
+        sim.regenerated = Date.now();
+        sim.count++;
+        save();
+        if (!WMT.dom.reveal()) renderPulls();
+      }
+    }, 500);
+  }
 
   function open(e, sync) {
     if (sim.count < 1 || document.getElementById("robot")) return;
@@ -32,7 +50,9 @@
       return;
     }
     sim.count--;
-    sim.opens.push({ t: Date.now(), trusted: e.isTrusted, type: e.type });
+    sim.opens.push({ t: Date.now(), trusted: e.isTrusted, type: e.type, hidden: document.visibilityState });
+    if (!sim.count && !sim.emptyAt) sim.emptyAt = Date.now();
+    save();
     sync ? renderReveal() : setTimeout(renderReveal, 200);
   }
 
@@ -109,6 +129,10 @@
       next.disabled = i === DECK.length - 1;
       // Comme le site (11/2026) : « Encore N cartes », désactivé tant que tout n'a pas été vu.
       seen.add(i);
+      if (pilot) {
+        const pulledSim = JSON.parse(sessionStorage.getItem("__simPulled") || "[]");
+        if (!pulledSim.some((x) => x[0] === t)) sessionStorage.setItem("__simPulled", JSON.stringify([...pulledSim, [t, d, r]]));
+      }
       const left = DECK.length - seen.size;
       cont.disabled = left > 0;
       cont.textContent = left > 0 ? `Encore ${left} carte${left > 1 ? "s" : ""}` : "Continuer";
@@ -116,7 +140,7 @@
     };
     show();
     next.addEventListener("click", () => setTimeout(() => { i++; show(); }, 120));
-    cont.addEventListener("click", () => setTimeout(() => { sim.continues++; renderPulls(); }, 150));
+    cont.addEventListener("click", () => setTimeout(() => { sim.continues++; save(); renderPulls(); }, 150));
   }
 
   window.WMT_openButton = () => [...m.querySelectorAll("button")].find((b) => b.textContent.trim() === "Ouvrir");

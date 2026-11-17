@@ -3,7 +3,10 @@
 // enregistrés dans window.__msgs). Chargé avant les scripts de l'extension.
 (function () {
   const listeners = [];
-  const store = (window.__store = {});
+  // Gardé dans sessionStorage : le pilote passe d'une page de test à l'autre (Paquets →
+  // Collection → Paquets) comme sur le site, et doit retrouver sa config et son état.
+  const store = (window.__store = JSON.parse(sessionStorage.getItem("__wmtStore") || "{}"));
+  const persist = () => sessionStorage.setItem("__wmtStore", JSON.stringify(store));
   const clone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
   window.__msgs = [];
   window.__drives = [];
@@ -29,6 +32,7 @@
             changes[k] = { oldValue: store[k], newValue: clone(v) };
             store[k] = clone(v);
           }
+          persist();
           setTimeout(() => listeners.forEach((l) => l(changes, "local")));
         },
         async remove(keys) {
@@ -37,6 +41,7 @@
             changes[k] = { oldValue: store[k] };
             delete store[k];
           }
+          persist();
           setTimeout(() => listeners.forEach((l) => l(changes, "local")));
         },
         async getBytesInUse() {

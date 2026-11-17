@@ -53,10 +53,9 @@ recharge la page WikiMasters.
    d'une étiquette, clique sur « Étiqueter » puis sur l'étiquette, et recommence
    pour la suivante. Seules les étiquettes qui existent déjà dans le jeu sont
    posées : les autres (par exemple « Shiny » tant que tu ne l'as pas créée)
-   sont sautées et listées à la fin. « Défausser » n'est jamais touché. Un clic
-   ou une touche ailleurs que dans le panneau arrête tout. Garde l'onglet
-   visible : Chrome ralentit fortement les onglets en arrière-plan. Si tu
-   l'arrêtes, le bouton devient « Reprendre l'étiquetage (page X / Y) » et
+   sont sautées et listées à la fin. « Défausser » n'est jamais touché. Seul le
+   bouton « Arrêter » du panneau l'arrête. L'onglet peut rester en arrière-plan
+   (voir « Vrais clics » plus bas). Si tu l'arrêtes, le bouton devient « Reprendre l'étiquetage (page X / Y) » et
    repart de la page où il s'était arrêté (« Recommencer depuis la page 1 »
    pour tout refaire). Chaque action recharge la collection côté site (2 à 3 s) :
    l'extension attend la fin de chaque rechargement avant de continuer.
@@ -81,10 +80,24 @@ politesse demandée par Wikimedia.
 Les noms d'étiquettes doivent être **exactement ceux du jeu**. Les couleurs sont
 reprises automatiquement du jeu dès qu'une étiquette apparaît sur une carte.
 
+### Vrais clics et onglet en arrière-plan
+
+Le site ignore les clics simulés en JavaScript : l'extension clique donc comme
+une vraie souris, grâce au mode débogage de Chrome (permission « debugger »).
+Pendant qu'elle travaille, Chrome affiche le bandeau « WikiMasters Tagger a
+commencé à déboguer ce navigateur ». Laisse-le ouvert : le fermer arrête ce qui
+tourne. Ce mode garde aussi l'onglet du jeu actif quand il est en arrière-plan,
+dans une fenêtre réduite ou cachée par une autre : tu peux faire autre chose
+pendant l'étiquetage, la vente ou l'ouverture des paquets. Ça marche dans
+n'importe quel format de fenêtre (écran partagé, portable zoomé à 125 %…) :
+l'extension fait défiler jusqu'à l'élément et vérifie qu'il n'est pas caché
+avant de cliquer. Seuls les boutons « Arrêter » du panneau arrêtent un
+automatisme ; tes clics ailleurs ne changent rien.
+
 ### Paquets : rappels et cartes tirées
 
-L'extension n'ouvre de paquet qu'après ton propre clic sur « Ouvrir » (voir
-l'enchaînement plus bas), et jamais au-delà du stock disponible à ce moment-là.
+Sans le pilote (plus bas), l'extension n'ouvre de paquet qu'après ton propre
+clic sur « Ouvrir », et jamais au-delà du stock disponible à ce moment-là.
 
 - **Rappels.** Chaque fois que tu passes sur la page Paquets, l'extension relève
   ton compteur (« 7 / 10 paquets disponibles »). Elle en déduit quand ton stock
@@ -108,20 +121,27 @@ l'enchaînement plus bas), et jamais au-delà du stock disponible à ce moment-l
 - **Enchaînement des paquets** (désactivable). Ton clic sur « Ouvrir », ou la
   touche Entrée quand le bouton est sélectionné, lance l'enchaînement.
   L'extension rouvre ensuite un par un les paquets qui étaient disponibles à ce
-  moment-là, jamais ceux qui se rechargent entre-temps. Si le site refuse un
-  jour les clics automatiques, l'extension ne force rien : elle te demande de
-  cliquer, et l'enchaînement reprend.
+  moment-là, jamais ceux qui se rechargent entre-temps.
+- **Pilote** (désactivé par défaut, à cocher dans le panneau des Paquets :
+  « Pilote : ouvrir les paquets dès qu'ils arrivent »). Sous ta supervision,
+  l'extension ouvre elle-même chaque paquet dès qu'il est disponible, même si
+  l'onglet est en arrière-plan. Une fois le stock vide, avec « Puis étiqueter
+  les cartes tirées », elle va sur ta Collection (tri « Date d'ajout »), pose les
+  étiquettes suggérées pour les cartes qu'elle vient de tirer, remet le tri comme
+  avant et revient attendre le paquet suivant. « Arrêter le pilote » l'arrête.
+  Si une vérification « robot » ou une fenêtre du site l'interrompt, une
+  notification Chrome te prévient. Après un rechargement de la page, il reprend
+  où il en était.
 - **Dans les deux cas**, si la vérification « je ne suis pas un robot »
   s'affiche, tout se met en pause sans y toucher et reprend une fois que tu
   l'as validée. Pareil pour toute fenêtre du site (annonce, toast…), même si
-  elle grise le bouton « Ouvrir » un moment, et si l'onglet n'est plus visible.
+  elle grise le bouton « Ouvrir » un moment.
   Si une ouverture échoue avec un message d'erreur du site, l'extension
   réessaie deux fois en laissant passer quelques secondes.
-- **Ce qui arrête tout** : un clic souris ou une touche du clavier ailleurs que
-  dans le panneau. Fermer une fenêtre du site (clic dessus, Échap) ne compte
-  pas. Les mouvements du curseur et les touches seules comme Alt (Alt+Tab),
-  Ctrl ou Windows n'arrêtent rien. Une « sanction » affichée par
-  le site arrête tout définitivement, sans réessayer.
+- **Ce qui arrête tout** : les boutons « Arrêter » du panneau, et la fermeture
+  du bandeau de débogage. Une « sanction » ou un « compte suspendu » affiché par
+  le site, ou un refus du site qui parle de robots ou d'automatisation, arrête
+  tout définitivement (le pilote est désactivé), sans réessayer.
 - **Étiquette Shiny.** Les cartes shiny (✦ à côté de la rareté) se voient
   proposer l'étiquette « Shiny » en plus de leur catégorie, même si elles sont
   déjà classées. Crée l'étiquette « Shiny » dans le jeu pour l'utiliser.

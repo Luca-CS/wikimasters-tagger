@@ -221,6 +221,19 @@ SCENARIOS = [
     ("chain-trustedonly", "cdp", "/pulls/?state=chain&trustedonly", "normal", lambda o: CHAIN_DONE(o) + [
         ("aucun clic refusé par le site", (o.get("sim") or {}).get("ignored", 0) == 0),
     ]),
+    # Pilote : activé par ton clic, puis onglet en arrière-plan pendant tout le scénario.
+    ("pilot-hidden", "cdp", "/pulls/?state=chain&pilot", "pilot", lambda o: [
+        ("l'autre onglet est au premier plan", o.get("otherTabVisible") == "visible"),
+        ("2 paquets ouverts par le pilote, onglet caché mais actif", len((o.get("pilotSim") or {}).get("opens") or []) >= 2
+            and all(x.get("trusted") for x in (o.get("pilotSim") or {}).get("opens") or [])
+            and all(x.get("hidden") == "visible" for x in (o.get("pilotSim") or {}).get("opens") or [])),
+        ("puis étiquetage des cartes tirées dans la Collection", o.get("reachedCollection") is True
+            and any(a.startswith("Sydney Park:Cinéma") for a in o.get("applied") or [])
+            and any(a.startswith("Porsche 917:Automobile") for a in o.get("applied") or [])),
+        ("retour aux Paquets, file vidée", o.get("backToPulls") is True and o.get("pendingOnReturn") == []),
+        ("paquet rechargé ouvert sans toi", o.get("thirdOpen") is True and (o.get("pilotSim") or {}).get("regenerated") is True),
+        ("pilote toujours actif", (o.get("store") or {}).get("autoOpen") is True),
+    ]),
     ("service-worker", "selftest", None, "selftest", lambda o: [
         ("badge et alarme « plein » (gratuit : 24 min)", o.get("free", {}).get("badge") == "7"
             and any(a["name"] == "wmt-full" and 23 <= a["inMin"] <= 25 for a in o.get("free", {}).get("alarms", []))),

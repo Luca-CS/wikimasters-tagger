@@ -22,7 +22,7 @@ ROOT = HERE.parents[2]
 INPUT = ROOT / "input"
 OUT = HERE / "out"
 
-EXT_SCRIPTS = ["lib/store.js", "lib/packs.js", "lib/rhythm.js", "lib/dom.js", "content/content.js"]
+EXT_SCRIPTS = ["lib/store.js", "lib/packs.js", "lib/rhythm.js", "lib/dom.js", "lib/act.js", "content/content.js"]
 
 
 def find_input(test) -> Path | None:

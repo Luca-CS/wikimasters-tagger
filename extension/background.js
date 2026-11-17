@@ -2,10 +2,20 @@
 // - ouvre le rapport ou la config à la demande du content script (pas d'accès à chrome.tabs là-bas) ;
 // - rappels de paquets : à partir du dernier relevé fait sur la page Paquets, affiche le nombre
 //   estimé de paquets sur l'icône et envoie une notification quand le stock est plein ;
-// - collecte du marché en lecture seule, si tu l'as activée dans la config (voir lib/market.js).
-importScripts("lib/defaults.js", "lib/store.js", "lib/packs.js", "lib/market.js", "lib/marketdb.js");
+// - collecte du marché en lecture seule, si tu l'as activée dans la config (voir lib/market.js) ;
+// - pilote (lib/driver.js) : vrais clics et touches dans l'onglet WikiMasters par chrome.debugger.
+importScripts("lib/defaults.js", "lib/store.js", "lib/packs.js", "lib/market.js", "lib/marketdb.js", "lib/driver.js");
 
-const { store, packs, market, marketdb } = WMT;
+const { store, packs, market, marketdb, driver } = WMT;
+
+// --- Pilote : actions dans le jeu demandées par le content script ------------------
+
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  if (!msg || msg.type !== "drive") return;
+  driver.handle(msg, sender).then(reply);
+  return true; // réponse asynchrone
+});
+chrome.debugger.onDetach.addListener((source, reason) => driver.onDetach(source, reason));
 const REPORT = chrome.runtime.getURL("pages/report.html");
 const PULLS = "https://www.wiki-masters.com/pulls";
 

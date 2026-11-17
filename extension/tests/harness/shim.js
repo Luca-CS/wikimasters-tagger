@@ -6,6 +6,14 @@
   const store = (window.__store = {});
   const clone = (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
   window.__msgs = [];
+  window.__drives = [];
+  let driveSeq = 0;
+  const driveWait = new Map();
+  window.__wmtDriveReply = (id, res) => {
+    const resolve = driveWait.get(id);
+    driveWait.delete(id);
+    if (resolve) resolve(res);
+  };
   window.chrome = {
     storage: {
       local: {
@@ -42,6 +50,17 @@
       getManifest: () => ({ version: "harness" }),
       getURL: (p) => "/ext/" + p,
       async sendMessage(msg) {
+        // Pilote (vrais clics) : relayé à cdp.mjs, qui envoie Input.dispatch* à cette page,
+        // comme le ferait lib/driver.js avec chrome.debugger.
+        if (msg && msg.type === "drive") {
+          window.__drives.push(msg.op);
+          if (!window.__wmtDrive) return { ok: false, error: "pas de pilote dans ce banc de test" };
+          const id = ++driveSeq;
+          return new Promise((resolve) => {
+            driveWait.set(id, resolve);
+            window.__wmtDrive(JSON.stringify({ id, msg }));
+          });
+        }
         window.__msgs.push(msg);
         return { ok: true };
       },

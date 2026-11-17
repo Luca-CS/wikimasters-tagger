@@ -5,7 +5,7 @@
 //   trustedonly   « Ouvrir » ignore les clics non humains (event.isTrusted)
 //   disabledflash « Ouvrir » désactivé 1,5 s après « Continuer »
 //   popup         après le 1er paquet : fenêtre plein écran sans rôle (annonce) pendant 20 s, « Ouvrir » grisé
-//   openerror     la 1re ouverture automatique échoue avec « Erreur réseau. Réessayez. »
+//   openerror     la 2e ouverture (1re du pilote) échoue avec « Erreur réseau. Réessayez. »
 //   sanction      après le 1er paquet : « Sanction active », « Ouvrir » grisé
 //   toast         après le 1er paquet : petit toast avec un bouton de fermeture (#toast-close)
 (function () {
@@ -23,7 +23,7 @@
   function open(e, sync) {
     if (sim.count < 1 || document.getElementById("robot")) return;
     if (PARAMS.has("trustedonly") && !e.isTrusted) { sim.ignored++; return; }
-    if (PARAMS.has("openerror") && !e.isTrusted && !sim.errored) {
+    if (PARAMS.has("openerror") && sim.opens.length >= 1 && !sim.errored) {
       sim.errored = Date.now();
       const err = document.createElement("div");
       err.className = "rounded-lg bg-red-500/10 border border-red-500/20 p-3 text-sm text-red-400 max-w-sm text-center";
@@ -98,6 +98,7 @@
     const [prev, , next] = row.children;
     const cont = [...m.querySelectorAll("button")].find((b) => b.textContent.trim() === "Continuer");
     let i = 0;
+    const seen = new Set();
     const show = () => {
       const [t, d, r] = DECK[i];
       m.querySelector("h3").textContent = t;
@@ -106,6 +107,11 @@
       counter.textContent = String(i + 1);
       prev.disabled = i === 0;
       next.disabled = i === DECK.length - 1;
+      // Comme le site (11/2026) : « Encore N cartes », désactivé tant que tout n'a pas été vu.
+      seen.add(i);
+      const left = DECK.length - seen.size;
+      cont.disabled = left > 0;
+      cont.textContent = left > 0 ? `Encore ${left} carte${left > 1 ? "s" : ""}` : "Continuer";
       sim.cards.push({ t: Date.now(), card: i + 1, rarity: r });
     };
     show();

@@ -2,7 +2,7 @@
 // - modes d'enchaînement : VRAIS clics souris / touches (Input.dispatch*), seuls à être « isTrusted » ;
 // - mode selftest : ouvre la page d'auto-test de l'extension chargée (alarmes, badge, notifications).
 // Usage : node cdp.mjs <port> <url> <mode>
-//   modes : page | normal | robot | takeover | move | alt | toast | sanction | trustedonly | selftest
+//   modes : page | normal | robot | takeover | stop | move | alt | toast | sanction | trustedonly | selftest
 //   (page : attend le résultat que le scénario de la page écrit dans <pre id="wmt-out">)
 // Écrit un objet JSON sur stdout (analysé par run.py).
 const [port, url, mode] = process.argv.slice(2);
@@ -74,6 +74,36 @@ try {
     }
   });
   await call("Runtime.enable");
+  // Pilote de l'extension (lib/driver.js) rejoué ici : shim.js appelle __wmtDrive, on envoie
+  // les vrais événements à la page et on répond par __wmtDriveReply.
+  out.drive = { clicks: 0, keys: 0, texts: 0 };
+  await call("Runtime.addBinding", { name: "__wmtDrive" });
+  page.ws.addEventListener("message", async (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.method !== "Runtime.bindingCalled" || msg.params.name !== "__wmtDrive") return;
+    const { id, msg: m } = JSON.parse(msg.params.payload);
+    let res = { ok: true, attached: true };
+    try {
+      if (m.op === "click") {
+        out.drive.clicks++;
+        await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: m.x, y: m.y, button: "none", buttons: 0 });
+        await call("Input.dispatchMouseEvent", { type: "mousePressed", x: m.x, y: m.y, button: "left", buttons: 1, clickCount: 1 });
+        await call("Input.dispatchMouseEvent", { type: "mouseReleased", x: m.x, y: m.y, button: "left", buttons: 0, clickCount: 1 });
+      } else if (m.op === "key") {
+        out.drive.keys++;
+        const K = { Enter: [13, "\r"], Escape: [27, ""], Backspace: [8, ""] }[m.key];
+        const base = { key: m.key, code: m.key, windowsVirtualKeyCode: K[0], nativeVirtualKeyCode: K[0] };
+        await call("Input.dispatchKeyEvent", { type: K[1] ? "keyDown" : "rawKeyDown", ...base, ...(K[1] ? { text: K[1], unmodifiedText: K[1] } : {}) });
+        await call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+      } else if (m.op === "text") {
+        out.drive.texts++;
+        await call("Input.insertText", { text: m.text });
+      }
+    } catch (e) {
+      res = { ok: false, error: String(e) };
+    }
+    await call("Runtime.evaluate", { expression: `window.__wmtDriveReply(${JSON.stringify(id)}, ${JSON.stringify(res)})` });
+  });
   const ev = async (expr) => (await call("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result.value;
   const until = async (expr, ms) => {
     const end = Date.now() + ms;
@@ -119,8 +149,17 @@ try {
       await clickOn(`document.getElementById("robot-check")`); // tu valides la vérification
     }
     if (mode === "takeover") {
+      // Tu cliques ailleurs pendant l'enchaînement : il continue (seul « Arrêter » l'arrête).
       await until(`__sim.opens.length >= 2 && !!WMT.dom.reveal() && WMT.dom.reveal().index >= 2`, 60000);
       await clickOn(`[...document.querySelectorAll("main span")].find((s) => s.textContent.trim() === "Carte").parentElement`);
+      await sleep(1000);
+      out.noteJustAfter = await ev(`document.getElementById("wmt-host").shadowRoot.querySelector(".note").textContent`);
+      await until(done, 90000);
+      await sleep(1500);
+    } else if (mode === "stop") {
+      // Bouton « Arrêter » du panneau pendant le 2e paquet.
+      await until(`__sim.opens.length >= 2 && !!WMT.dom.reveal() && WMT.dom.reveal().index >= 2`, 60000);
+      await clickOn(`[...document.getElementById("wmt-host").shadowRoot.querySelectorAll("button")].find((b) => b.textContent.trim() === "Arrêter" && !b.hidden)`);
       await sleep(1000);
       out.noteJustAfter = await ev(`document.getElementById("wmt-host").shadowRoot.querySelector(".note").textContent`);
       await sleep(9000);
@@ -159,7 +198,7 @@ try {
       await until(done, 90000);
       await sleep(1500);
     }
-    out.sim = await ev(`({ count: __sim.count, opens: __sim.opens.map((o) => (o.trusted ? "humain" : "auto") + ":" + o.type), continues: __sim.continues, robotTrusted: __sim.robotTrusted ?? null })`);
+    out.sim = await ev(`({ count: __sim.count, opens: __sim.opens.map((o) => (o.trusted ? "humain" : "auto") + ":" + o.type), continues: __sim.continues, robotTrusted: __sim.robotTrusted ?? null, ignored: __sim.ignored })`);
     const cards = await ev(`__sim.cards`);
     out.cardDelaysMs = cards.slice(1).map((c, i) => (c.card === 1 ? null : `${cards[i].rarity}:${c.t - cards[i].t}`)).filter(Boolean);
     out.panel = await panel();

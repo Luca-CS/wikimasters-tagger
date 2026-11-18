@@ -63,14 +63,6 @@ keywords = [
   "poisson", "reptile", "plante", "arbre", "champignon", "animal\\w*", "race de \\w+",
 ]
 
-[tags."Tech/Informatique"]
-keywords = [
-  "logiciel", "application", "systeme d'exploitation", "langage de programmation",
-  "site web", "reseau social", "jeu video", "console de jeux?", "informatique",
-  "smartphone", "moteur de recherche",
-]
-title_keywords = ["playstation", "nintendo", "xbox", "microsoft", "google", "apple"]
-
 [tags."Entreprises/Marques"]
 keywords = ["entreprise", "societe", "marque", "constructeur", "multinationale", "groupe industriel", "chaine de \\w+"]
 

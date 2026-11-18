@@ -72,6 +72,10 @@
   const NEW_IN_V5 = ["Plateau de Saclay"];
   const toV5 = (c, dflt) => insertDefaults(c, dflt, NEW_IN_V5, 5);
 
+  /** v6 : étiquette « Tech » (informatique, internet, électronique, IA, entreprises du secteur). */
+  const NEW_IN_V6 = ["Tech"];
+  const toV6 = (c, dflt) => insertDefaults(c, dflt, NEW_IN_V6, 6);
+
   /** Config complète ; initialisée avec defaults.js au premier lancement, puis migrée. */
   async function getConfig() {
     const dflt = WMT.defaults.config();
@@ -97,6 +101,10 @@
     }
     if (c.version < 5) {
       c = toV5(c, dflt);
+      await set("config", c);
+    }
+    if (c.version < 6) {
+      c = toV6(c, dflt);
       await set("config", c);
     }
     return { ...c, settings: { ...dflt.settings, ...c.settings } };

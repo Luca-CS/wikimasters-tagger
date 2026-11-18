@@ -36,7 +36,10 @@ Le panneau **Tagger** apparaît en bas à droite sur les pages Collection et Paq
 - **Défilement et enchaînement** : après ton clic sur « Ouvrir », fait défiler les cartes,
   clique sur « Continuer » et rouvre les paquets disponibles.
 - **Pilote** (désactivé par défaut) : ouvre les paquets dès qu'ils arrivent, puis étiquette
-  les cartes tirées dans ta Collection et revient attendre le suivant.
+  les cartes tirées dans ta Collection et revient attendre le suivant. Option « Puis vendre les
+  cartes sans étiquette » (raretés choisies dans le panneau de la Collection) : le pilote ne
+  vend jamais une carte qui a une étiquette suggérée, et s'arrête si une carte qu'il vient
+  d'étiqueter apparaît sans étiquette.
 
 ### Bon à savoir
 

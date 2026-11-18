@@ -13,6 +13,7 @@
 //                 cartes tirées sont transmises à la Collection de test (__simPulled)
 //   pilotsell     (avec pilot) vente par le pilote après l'étiquetage (PC à vendre)
 //   tagfail       (avec pilotsell) l'étiquette de Limahl n'est pas enregistrée : contrôle du pilote
+//   market        (avec pilot) stock vide : le pilote part surenchérir sur le Marché (market_sim.js)
 (function () {
   if (STATE !== "chain") return;
   const DECK = [
@@ -25,7 +26,7 @@
   const m = document.querySelector("main");
   const pilot = PARAMS.has("pilot");
   const saved = pilot && JSON.parse(sessionStorage.getItem("__sim") || "null");
-  const sim = (window.__sim = saved || { count: pilot ? 2 : 3, opens: [], cards: [], continues: 0, robotShown: 0, ignored: 0 });
+  const sim = (window.__sim = saved || { count: PARAMS.has("market") ? 0 : pilot ? 2 : 3, opens: [], cards: [], continues: 0, robotShown: 0, ignored: 0 });
   const save = () => pilot && sessionStorage.setItem("__sim", JSON.stringify(sim));
   if (pilot) {
     sessionStorage.setItem("__simPilot", "1");

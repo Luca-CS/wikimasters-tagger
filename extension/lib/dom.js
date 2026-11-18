@@ -428,7 +428,9 @@
     for (const el of doc.querySelectorAll("label, span, p, div, h2, h3")) {
       if (leaf(el) && /robot/i.test(text(el)) && shown(el)) return true;
     }
-    return !!overlay(doc);
+    const over = overlay(doc);
+    // La « Vue du marché » (ouverte par la surenchère du pilote) n'est pas une fenêtre bloquante.
+    return !!over && ![...over.querySelectorAll("h2")].some((h) => text(h) === "Vue du marché");
   }
 
   /** Texte d'une fenêtre bloquante (journal de diagnostic). */
@@ -464,7 +466,112 @@
     return (m ? m[1] : String(t || "")).slice(0, 240);
   }
 
+  // --- Marché (relevé le 18/11/2026, exports MesEncheres / EnchereOuverte / MarcheOuvert) ---
+  // Onglets : boutons « Parcourir », « Mes ventes (0/10) », « Mes enchères (9) », « Gagnées (32) »…
+  // Mes enchères : <div id="marketplace-auction-{id}"><a href="/marketplace/{id}"> avec en tête un
+  // <span> « Surenchéri » ou « Vous menez », la carte (h3), « Mise actuelle » et « Durée ».
+  // Page d'une enchère : h1 (titre) + bouton aria-label « Vue du marché », « Mise actuelle »,
+  // « Meneur : <span>pseudo</span> », « Temps restant » / « Se termine dans 47m 58s »,
+  // « Votre solde : <span>1 414</span> wikibidous », « Mise minimum : 150 »,
+  // input aria-label « Montant de la mise », bouton « Miser », h2 « Historique des mises (10) »
+  // suivi d'un <ul> (li : lien du pseudo, date, montant ; le plus récent en haut).
+  // Vue du marché : fenêtre fixe dans <body> (h2 « Vue du marché », bouton aria-label « Fermer »),
+  // cases « Ventes », « Dernier », « Moyenne », « Min », « Max » (<p> libellé puis <p> valeur).
+
+  const num = (t) => {
+    const m = clean(t).replace(/\s/g, "").match(/^\D*(\d+)\D*$/);
+    return m ? +m[1] : null;
+  };
+
+  /** Onglet du marché dont le libellé commence par `label` (« Mes enchères »). */
+  const marketTab = (label, doc = document) => buttonByText(doc.querySelector("main"), new RegExp(`^${label}\\b`));
+
+  /** Valeur affichée juste après le libellé `label` (« Mise actuelle », « Durée »). */
+  function valueAfter(scope, label) {
+    for (const el of scope.querySelectorAll("span, p, div")) {
+      // Libellé seul, éventuellement avec une icône (« <svg/>Durée »).
+      if (text(el) === label && !el.querySelector("span, p, div")) {
+        const next = el.nextElementSibling;
+        if (next) return text(next);
+      }
+    }
+    return null;
+  }
+
+  /** Enchères de l'onglet « Mes enchères » : {id, link, status, title, current, duration}. */
+  function myBids(doc = document) {
+    const out = [];
+    for (const box of doc.querySelectorAll('main [id^="marketplace-auction-"]')) {
+      const link = box.querySelector('a[href*="/marketplace/"]');
+      const h3 = box.querySelector("h3");
+      if (!link || !h3) continue;
+      const first = link.querySelector("span");
+      out.push({
+        id: box.id.replace(/^marketplace-auction-/, ""),
+        link,
+        status: first ? text(first) : "",
+        title: text(h3),
+        current: num(valueAfter(box, "Mise actuelle")),
+        duration: valueAfter(box, "Durée"),
+      });
+    }
+    return out;
+  }
+
+  /** Page d'une enchère, ou null si ce n'en est pas une. */
+  function auction(doc = document) {
+    const main = doc.querySelector("main");
+    const miser = buttonByText(main, /^Miser$/);
+    const input = main && main.querySelector('input[aria-label="Montant de la mise"]');
+    if (!main || !miser || !input) return null;
+    const h1 = main.querySelector("h1");
+    const leafWith = (re) => [...main.querySelectorAll("span, p")].find((el) => re.test(text(el)) && el.querySelectorAll("span, p").length <= 1);
+    const lead = [...main.querySelectorAll("p")].find((p) => /^Meneur :/.test(text(p)));
+    const bal = [...main.querySelectorAll("span")].find((s) => /^Votre solde :/.test(text(s)));
+    const minEl = leafWith(/^Mise minimum : ?\d/);
+    const ends = [...main.querySelectorAll("span")].find((s) => leaf(s) && /^Se termine dans /.test(text(s)));
+    const ended = [...main.querySelectorAll("span, p")].find((s) => leaf(s) && /^(Terminée|Enchère terminée|Vendue)/i.test(text(s)));
+    const hist = [...main.querySelectorAll("h2")].find((x) => /^Historique des mises/.test(text(x)));
+    const list = hist && hist.parentElement ? hist.parentElement.querySelector("ul") : null;
+    const rows = list ? [...list.children].map((li) => {
+      const a = li.querySelector("a");
+      const spans = [...li.querySelectorAll("span")].filter(leaf);
+      const money = [...li.querySelectorAll("span")].reverse().find((s) => num(text(s)) != null);
+      return { name: a ? text(a) : spans.length ? text(spans[0]) : "", amount: money ? num(text(money)) : null };
+    }) : [];
+    const back = [...main.querySelectorAll("a, button")].find((x) => /^Retour au marché$/.test(text(x)));
+    return {
+      title: h1 ? text(h1) : "",
+      current: num(valueAfter(main, "Mise actuelle")),
+      leader: lead ? text(lead).replace(/^Meneur :\s*/, "") : "",
+      balance: bal && bal.querySelector("span") ? num(text(bal.querySelector("span"))) : null,
+      min: minEl ? num(text(minEl)) : null,
+      remainingText: ends ? text(ends) : ended ? text(ended) : null,
+      input,
+      miser,
+      historyCount: hist ? num((text(hist).match(/\((\d+)\)/) || [])[1]) ?? rows.length : null,
+      history: rows,
+      marketButton: main.querySelector('button[aria-label="Vue du marché"]'),
+      back,
+    };
+  }
+
+  /** Fenêtre « Vue du marché » ouverte : {el, avg, sales, close}, ou null. */
+  function marketView(doc = document) {
+    for (const h2 of doc.querySelectorAll("body > div h2")) {
+      if (text(h2) !== "Vue du marché" || h2.closest("main") || h2.closest("#wmt-host")) continue;
+      const el = h2.closest('div[class*="fixed"]') || h2.closest("body > div");
+      const stat = (label) => {
+        const p = [...el.querySelectorAll("p")].find((x) => leaf(x) && text(x) === label);
+        return p && p.nextElementSibling ? num(text(p.nextElementSibling)) : null;
+      };
+      return { el, avg: stat("Moyenne"), sales: stat("Ventes"), close: el.querySelector('button[aria-label="Fermer"]') };
+    }
+    return null;
+  }
+
   WMT.dom = {
+    marketTab, myBids, auction, marketView,
     clean, isShinyBadge, pager, pageInput, cardElements, readCard, cards, activeFilters, hexColor,
     selectButton, quitSelectionButton, selectionBar, tagModal,
     collectionLoading, tagFilterButton, sortButton, navLink, tagFilterOptions, rarityChips, isStarred, pendingTrade, barButton, discardDialog, discardedMessage, emptyResult,

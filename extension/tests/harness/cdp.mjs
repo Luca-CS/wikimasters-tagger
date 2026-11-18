@@ -160,7 +160,35 @@ try {
   const done = `__sim.count === 0 && !WMT.dom.reveal() && __sim.continues === 3`;
 
   out.visibility = await ev(`document.visibilityState`);
-  if (mode === "pilot" || mode === "pilotsell" || mode === "pilottagfail") pilotRun: {
+  if (mode.startsWith("market")) {
+    // Toi : facteurs réglés auparavant, puis « Puis surenchérir sur mes enchères » (et sa
+    // confirmation) et le pilote, par de vrais clics ; puis un autre onglet au premier plan.
+    const factors = mode === "market-toohigh" ? {} : { Incel: 1.5 };
+    await until(`!!document.getElementById("wmt-host") && !!window.WMT_openButton && !!WMT_openButton()`, 15000);
+    await sleep(800);
+    await ev(`(async () => { const c = await WMT.store.getConfig(); c.settings.rebidFactor = 1; c.settings.rebidFactors = ${JSON.stringify(factors)}; await WMT.store.saveConfig(c); return true; })()`);
+    const toggle = (label) => `[...document.getElementById("wmt-host").shadowRoot.querySelectorAll("label.toggle")].find((l) => l.textContent.includes("${label}")).querySelector("input")`;
+    const confirmBtn = `[...document.getElementById("wmt-host").shadowRoot.querySelectorAll(".note button")].find((b) => b.textContent.includes("Oui, activer la surenchère"))`;
+    for (let i = 0; i < 4; i++) {
+      await sleep(800);
+      await clickOn(toggle("Puis surenchérir"));
+      if (await until(`!!(${confirmBtn})`, 3000)) break;
+    }
+    out.confirmText = await ev(`document.getElementById("wmt-host").shadowRoot.querySelector(".note").textContent`);
+    await clickOn(confirmBtn);
+    await sleep(500);
+    await clickOn(toggle("Pilote"));
+    const other = await http(`/json/new?${encodeURIComponent("about:blank")}`, "PUT");
+    const front = await connect(other.webSocketDebuggerUrl);
+    await front.call("Page.bringToFront");
+    const store = `JSON.parse(sessionStorage.getItem("__wmtStore") || "{}")`;
+    out.reachedMarket = await until(`location.pathname.startsWith("/marketplace")`, 60000);
+    out.reachedAuction = await until(`/^\\/marketplace\\/[0-9a-f-]{8,}/.test(location.pathname)`, 60000);
+    out.backToPulls = await until(`location.pathname.startsWith("/pulls") && !!(${store}.pilot || {}).marketAt`, mode === "market-snipe" ? 180000 : 90000);
+    out.bids = await ev(`JSON.parse(sessionStorage.getItem("__simBids") || "[]")`);
+    out.pilot = await ev(`(() => { const s = ${store}; return { autoOpen: s.config && s.config.settings.autoOpen, me: s.pilot && s.pilot.me, market: s.pilot && s.pilot.market }; })()`);
+    out.finalUrl = await ev(`location.href`);
+  } else if (mode === "pilot" || mode === "pilotsell" || mode === "pilottagfail") pilotRun: {
     // Ton seul geste : activer le pilote dans le panneau (vrai clic). Puis tu passes sur un
     // autre onglet : celui du jeu est en arrière-plan pendant tout le reste.
     await until(`!!document.getElementById("wmt-host") && !!window.WMT_openButton && !!WMT_openButton()`, 15000);

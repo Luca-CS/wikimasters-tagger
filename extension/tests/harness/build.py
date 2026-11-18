@@ -9,6 +9,9 @@ Les fichiers sont reconnus par leur contenu, pas par leur nom.
 Pages produites (servies par run.py, chemins identiques au site pour que l'extension s'y active) :
   out/collection/index.html   page Collection + fausse pagination + scénario
   out/pulls/index.html        page Paquets (états via ?state=…, voir pulls_setup.js)
+  out/marketplace/…           Marché : « Mes enchères » et page d'une enchère (market_sim.js),
+                              depuis les exports « Mes enchères », page d'enchère et page
+                              d'enchère avec la « Vue du marché » ouverte
   out/ext/                     copie de l'extension
   out/ext_selftest/            copie de l'extension + page d'auto-test du service worker
 """
@@ -22,7 +25,7 @@ ROOT = HERE.parents[2]
 INPUT = ROOT / "input"
 OUT = HERE / "out"
 
-EXT_SCRIPTS = ["lib/store.js", "lib/packs.js", "lib/rhythm.js", "lib/dom.js", "lib/act.js", "content/content.js"]
+EXT_SCRIPTS = ["lib/store.js", "lib/packs.js", "lib/rhythm.js", "lib/dom.js", "lib/act.js", "lib/rebid.js", "content/content.js"]
 
 
 def find_input(test) -> Path | None:
@@ -60,15 +63,49 @@ def extension_block(test_script: str) -> str:
     return "\n".join([
         '<link rel="stylesheet" href="/ext/content/content.css">',
         scripts(*[f"/ext/{s}" for s in EXT_SCRIPTS]),
-        scripts(test_script),
+        scripts(test_script) if test_script else "",
     ])
+
+
+def build_market(css, head_scripts) -> dict:
+    """Pages du Marché depuis les exports (sautées s'ils manquent)."""
+    listing = find_input(lambda t: 'id="marketplace-auction-' in t and "Mes enchères (" in t)
+    page = find_input(lambda t: "Historique des mises" in t and ">Miser<" in t and ">Vue du marché</h2>" not in t)
+    view_src = find_input(lambda t: ">Vue du marché</h2>" in t)
+    if not (listing and page and view_src):
+        return {}
+    view_html = view_src.read_text(encoding="utf-8")
+    i = view_html.index(">Vue du marché</h2>")
+    start = view_html.rindex('<div class="fixed inset-0', 0, i)
+    depth, j = 0, start
+    for m in re.finditer(r"<(/?)div\b[^>]*>", view_html[start:]):
+        depth += -1 if m.group(1) else 1
+        if depth == 0:
+            j = start + m.end()
+            break
+    view = re.sub(r"<script\b.*?</script>", "", view_html[start:j], flags=re.S)
+    (OUT / "marketplace").mkdir(parents=True, exist_ok=True)
+    (OUT / "marketplace" / "view.js").write_text(f"window.MARKET_VIEW = {json.dumps(view)};\n", encoding="utf-8")
+
+    def write(path, src):
+        html = strip_site(src.read_text(encoding="utf-8"))
+        html = html.replace("</head>", css_links(css) + "</head>", 1)
+        body = "\n".join([head_scripts, scripts("/marketplace/view.js", "/harness/market_sim.js"), extension_block(None)])
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "index.html").write_text(html.replace("</body>", body + "\n</body>"), encoding="utf-8")
+
+    write(OUT / "marketplace", listing)
+    ids = re.findall(r'id="marketplace-auction-([0-9a-f-]+)"', listing.read_text(encoding="utf-8"))
+    for auction_id in ids:
+        write(OUT / "marketplace" / auction_id, page)
+    return {"market": [listing.name, page.name, view_src.name]}
 
 
 def main() -> dict:
     shutil.rmtree(OUT, ignore_errors=True)
     OUT.mkdir(parents=True)
     shutil.copytree(ROOT / "extension", OUT / "ext", ignore=shutil.ignore_patterns("tests"))
-    for f in ("shim.js", "collection_setup.js", "collection_test.js", "pulls_setup.js", "chain_sim.js", "pulls_test.js"):
+    for f in ("shim.js", "collection_setup.js", "collection_test.js", "pulls_setup.js", "chain_sim.js", "pulls_test.js", "market_sim.js"):
         (OUT / "harness").mkdir(exist_ok=True)
         shutil.copy(HERE / f, OUT / "harness" / f)
 
@@ -110,6 +147,8 @@ def main() -> dict:
     ])
     (OUT / "pulls" / "index.html").write_text(page, encoding="utf-8")
     built["pulls"] = True
+
+    built.update(build_market(css, head_scripts))
 
     shutil.copytree(ROOT / "extension", OUT / "ext_selftest", ignore=shutil.ignore_patterns("tests"))
     shutil.copy(HERE / "selftest.js", OUT / "ext_selftest" / "pages" / "_selftest.js")

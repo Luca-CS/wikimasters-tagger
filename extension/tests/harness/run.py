@@ -254,6 +254,27 @@ SCENARIOS = [
         ("rien n'a été vendu", o.get("sold") == []),
         ("arrêt expliqué (Limahl sans étiquette)", any("Limahl" in t and "sans étiquette" in t for t in o.get("panel") or [])),
     ]),
+    # Surenchère du pilote (Marché > Mes enchères) : Incel est « Surenchéri », mise minimum 150,
+    # moyenne 130. Facteur 1,5 pour Incel : 150 < 195, mise tout de suite (20 min restantes).
+    ("market-rebid", "cdp", "/pulls/?state=chain&pilot&market&end=1200", "market", lambda o: [
+        ("surenchère activée par ton clic et ta confirmation", "Oui, activer" in (o.get("confirmText") or "")),
+        ("pilote : Paquets → Mes enchères → l'enchère", o.get("reachedMarket") is True and o.get("reachedAuction") is True),
+        ("une seule mise, de la mise minimum (150), vrai clic", [(b.get("amount"), b.get("ok"), b.get("trusted")) for b in o.get("bids") or []] == [(150, True, True)]),
+        ("mise vérifiée dans l'historique, pseudo appris", (o.get("pilot") or {}).get("me") == "Moi_Test"),
+        ("retour aux Paquets, pilote toujours actif", o.get("backToPulls") is True and (o.get("pilot") or {}).get("autoOpen") is True),
+    ]),
+    # Facteur par défaut 1 : 150 ≥ 130, pas de mise.
+    ("market-toohigh", "cdp", "/pulls/?state=chain&pilot&market&end=1200", "market-toohigh", lambda o: [
+        ("pilote : Paquets → Mes enchères → l'enchère", o.get("reachedMarket") is True and o.get("reachedAuction") is True),
+        ("aucune mise (mise minimum ≥ facteur × moyenne)", o.get("bids") == []),
+        ("retour aux Paquets, pilote toujours actif", o.get("backToPulls") is True and (o.get("pilot") or {}).get("autoOpen") is True),
+    ]),
+    # Moins de 5 min : attente puis mise à 12 s de la fin (sans prolonger l'enchère).
+    ("market-snipe", "cdp", "/pulls/?state=chain&pilot&market&end=70", "market-snipe", lambda o: [
+        ("une seule mise, de 150", [b.get("amount") for b in o.get("bids") or []] == [150]),
+        ("à 12 s de la fin (±1,5 s)", len(o.get("bids") or []) == 1 and 10500 <= o["bids"][0].get("remainingMs", 0) <= 13500),
+        ("retour aux Paquets", o.get("backToPulls") is True),
+    ]),
     ("service-worker", "selftest", None, "selftest", lambda o: [
         ("badge et alarme « plein » (gratuit : 24 min)", o.get("free", {}).get("badge") == "7"
             and any(a["name"] == "wmt-full" and 23 <= a["inMin"] <= 25 for a in o.get("free", {}).get("alarms", []))),

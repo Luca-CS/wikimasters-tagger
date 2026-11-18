@@ -40,6 +40,10 @@ Le panneau **Tagger** apparaît en bas à droite sur les pages Collection et Paq
   cartes sans étiquette » (raretés choisies dans le panneau de la Collection) : le pilote ne
   vend jamais une carte qui a une étiquette suggérée, et s'arrête si une carte qu'il vient
   d'étiqueter apparaît sans étiquette.
+- **Surenchère** (option du pilote, désactivée par défaut) : sur Marché > Mes enchères, le
+  pilote resurenchérit de la mise minimum sur tes enchères « Surenchéri » si elle reste sous
+  un facteur × la moyenne des ventes (réglable par carte sur la page de l'enchère) et que ton
+  solde suffit ; s'il reste moins de 5 min, il attend les 12 dernières secondes.
 
 ### Bon à savoir
 
@@ -54,7 +58,7 @@ Le panneau **Tagger** apparaît en bas à droite sur les pages Collection et Paq
 - Option Wikidata (dans la Config) : affine la catégorisation. Renseigne ton e-mail avant,
   Wikimedia le demande.
 - Collecte du marché (Config, désactivée par défaut) : relevé des enchères en lecture seule,
-  pour estimer les prix. L'extension ne mise jamais.
+  pour estimer les prix. Elle ne mise jamais (seule la surenchère du pilote mise).
 - Si le site change, **Exporter la page** (lien du panneau) enregistre la page à fournir pour
   adapter l'extension.
 

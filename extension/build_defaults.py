@@ -68,6 +68,12 @@ def main():
             "autoTagPulled": True,
             # Puis vente des cartes sans étiquette (raretés ci-dessous), confirmée en l'activant.
             "autoSellPulled": False,
+            # Puis surenchère sur Marché > Mes enchères (enchères « Surenchéri ») : mise minimum
+            # acceptée si < facteur × moyenne des ventes (facteur par carte possible), solde
+            # suffisant, à 12 s de la fin s'il reste moins de 5 min. Confirmée en l'activant.
+            "autoRebid": False,
+            "rebidFactor": 1.0,
+            "rebidFactors": {},
             # Vente (défausse) des cartes sans étiquette : raretés choisies dans le panneau,
             # favoris et cartes shiny gardés.
             "sellRarities": [],

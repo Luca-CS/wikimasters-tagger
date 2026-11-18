@@ -9,8 +9,13 @@
   window.__wmtLoaded = true;
 
   const { core, dom, store, packs, act } = WMT;
-  const ROUTES = { "/collection": "collection", "/pulls": "pulls" };
-  const routeOf = () => ROUTES[location.pathname.replace(/\/+$/, "")] || null;
+  const ROUTES = { "/collection": "collection", "/pulls": "pulls", "/marketplace": "market" };
+  /** Page gérée : Collection, Paquets, Marché (liste) ou page d'une enchère (« auction »). */
+  const routeOf = () => {
+    const path = location.pathname.replace(/\/+$/, "");
+    return ROUTES[path] || (/^\/marketplace\/[0-9a-f-]{8,}$/i.test(path) ? "auction" : null);
+  };
+  const onMarket = () => route === "market" || route === "auction";
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const fmtDate = (t) =>
     new Date(t).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
@@ -141,6 +146,7 @@
 
   function refresh() {
     if (!route) return;
+    if (onMarket()) return renderPanel(); // pas de surlignage sur le marché
     const cards = dom.cards(document, knownTags());
     const colors = {};
     cards.forEach((c) => Object.assign(colors, c.colors));
@@ -741,6 +747,8 @@
   /** Coupe le pilote (réglage désactivé). */
   function stopPilot(message) {
     pausePilot();
+    if (marketJob) marketJob.abort = true;
+    if (pilot.market) savePilot({ ...pilot, market: null });
     if (config && config.settings.autoOpen) setSetting("autoOpen", false);
     if (message) {
       log(message);
@@ -776,6 +784,7 @@
       if (!(await pilotClaim())) return; // un autre onglet pilote déjà
       if (live.count < 1) {
         if (pilotWork()) await pilotGo("/collection");
+        else if (rebidDue()) await pilotToMarket();
         return;
       }
       const b = dom.openButton();
@@ -901,6 +910,262 @@
       refresh();
     }
     return { ok: done && !job.abort && pilotOn(), tagged };
+  }
+
+  // --- Pilote : surenchère sur « Mes enchères » (décidée le 18/11/2026) ------------------
+  // Option « Puis surenchérir sur mes enchères » (désactivée par défaut, confirmée une fois).
+  // Quand le pilote n'a rien d'autre à faire, au plus toutes les 2 min, il va sur
+  // Marché > Mes enchères et ouvre chaque enchère « Surenchéri » : « Vue du marché » →
+  // « Moyenne », fenêtre refermée, puis décision (lib/rebid.js) : mise minimum < facteur ×
+  // moyenne (facteur par carte, réglable sur la page de l'enchère), solde suffisant ; plus de
+  // 5 min restantes : mise tout de suite, sinon attente des 12 dernières secondes (une mise
+  // dans les 10 dernières prolonge l'enchère de 60 s) puis nouvelle vérification. La mise est
+  // toujours la « Mise minimum » du site, et elle doit apparaître en tête de l'« Historique des
+  // mises » dans les 8 s, sinon le pilote s'arrête. Entre deux pages (liste ↔ enchère), l'état
+  // est gardé dans pilot.market : chaque page reprend l'étape suivante.
+
+  const REBID_EVERY = 2 * 60000;
+  const MARKET_STALE = 20 * 60000;
+  let marketJob = null; // {abort}
+
+  const rebidOn = () => pilotOn() && !!config.settings.autoRebid;
+  const rebidDue = () => rebidOn() && Date.now() - (pilot.marketAt || 0) >= REBID_EVERY;
+  const marketActive = () => !!(pilot.market && Date.now() - pilot.market.startedAt < MARKET_STALE);
+
+  async function savePilot(next) {
+    pilot = next;
+    await safe(() => store.set("pilot", pilot));
+  }
+
+  /** Depuis les Paquets : tour des enchères surenchéries. */
+  async function pilotToMarket() {
+    await savePilot({ ...pilot, market: { startedAt: Date.now(), done: [] } });
+    await pilotGo("/marketplace");
+  }
+
+  /** Fin du tour : retour aux Paquets. */
+  async function marketFinish() {
+    await savePilot({ ...pilot, market: null, marketAt: Date.now() });
+    if (pilotOn()) await pilotGo("/pulls").catch((e) => stopPilot(`Pilote arrêté : ${e.message}`));
+  }
+
+  function marketStatus(text) {
+    if (ui && ui.mstatus) {
+      ui.mstatus.hidden = !text;
+      ui.mstatus.textContent = text || "";
+    }
+  }
+
+  /** Pas de clic tant qu'une fenêtre du site (vérification…) est affichée ; arrêt sur sanction. */
+  async function marketReady(job) {
+    for (;;) {
+      if (job.abort) throw new Aborted();
+      if (dom.sanction()) {
+        stopForSanction();
+        throw new Aborted();
+      }
+      if (!dom.blockingDialog()) return;
+      marketStatus("Pause : une fenêtre du site est affichée. Ça reprend quand elle disparaît.");
+      await sleep(500);
+    }
+  }
+
+  /** Étape « liste » : onglet Mes enchères, prochaine enchère surenchérie, ou fin du tour. */
+  async function runMarketList() {
+    if (marketJob || !rebidOn() || !marketActive()) return;
+    const job = (marketJob = { abort: false });
+    let held = false;
+    let next = null;
+    try {
+      await hold();
+      held = true;
+      await marketReady(job);
+      await until(job, () => !!dom.marketTab("Mes enchères"), 15000, "onglet « Mes enchères » introuvable.");
+      marketStatus("Pilote : lecture de « Mes enchères »…");
+      await act.click(dom.marketTab("Mes enchères"), "onglet « Mes enchères »");
+      const count = () => +((dom.clean((dom.marketTab("Mes enchères") || {}).textContent).match(/\((\d+)\)/) || [])[1] || 0);
+      await waitFor(job, () => dom.myBids().length > 0 || count() === 0, 10000);
+      await wait(job, 1000); // liste complète
+      if (job.abort) throw new Aborted();
+      const done = new Set(pilot.market.done);
+      const outbid = dom.myBids()
+        .filter((b) => /^surench[ée]ri/i.test(b.status) && !done.has(b.id))
+        .map((b) => ({ ...b, remainingMs: WMT.rebid.remaining(b.duration) }));
+      next = WMT.rebid.order(outbid)[0] || null;
+      if (next) {
+        log(`pilote : enchère surenchérie « ${next.title} » (${next.duration})`);
+        const here = location.pathname;
+        await act.click(next.link, `enchère « ${next.title} »`);
+        await until(job, () => location.pathname !== here, 8000, `l'enchère « ${next.title} » ne s'ouvre pas.`);
+      }
+    } catch (e) {
+      if (!(e instanceof Aborted)) stopPilot(`Surenchère du pilote interrompue : ${e.message}`);
+      return;
+    } finally {
+      if (held) release();
+      marketJob = null;
+    }
+    if (!next) {
+      log("pilote : aucune enchère surenchérie à traiter");
+      await marketFinish();
+    }
+  }
+
+  /** Lit la « Moyenne » dans la « Vue du marché », puis referme la fenêtre. */
+  async function readAverage(job) {
+    const b = dom.auction() && dom.auction().marketButton;
+    if (!b) throw new Error("bouton « Vue du marché » introuvable.");
+    await act.click(b, "bouton « Vue du marché »");
+    await until(job, () => {
+      const v = dom.marketView();
+      return !!v && (v.avg != null || v.sales === 0);
+    }, 10000, "« Vue du marché » : moyenne introuvable.");
+    await wait(job, 600); // valeurs chargées
+    const v = dom.marketView();
+    const avg = v ? v.avg : null;
+    if (v && v.close) await act.click(v.close, "bouton « Fermer » de la Vue du marché");
+    await until(job, () => !dom.marketView(), 5000, "la « Vue du marché » ne se ferme pas.");
+    return avg;
+  }
+
+  /**
+   * Attend qu'il reste `target` ms. La fin est recalée à chaque changement du compteur
+   * (une mise d'un autre dans les 10 dernières secondes la repousse de 60 s).
+   */
+  async function waitRemaining(job, target, title) {
+    let last = null;
+    let endAt = null;
+    for (;;) {
+      if (job.abort) throw new Aborted();
+      if (dom.sanction()) {
+        stopForSanction();
+        throw new Aborted();
+      }
+      const a = dom.auction();
+      const r = a ? WMT.rebid.remaining(a.remainingText) : null;
+      if (r == null) throw new Error("temps restant illisible pendant l'attente.");
+      if (a.remainingText !== last) {
+        if (last !== null) endAt = Date.now() + r; // changement d'affichage : début d'une seconde
+        last = a.remainingText;
+      }
+      const left = endAt ? endAt - Date.now() : r;
+      if (left <= target) return left;
+      marketStatus(`Pilote : « ${title} », surenchère à 12 s de la fin (encore ${Math.ceil((left - target) / 1000)} s).`);
+      await sleep(left - target > 3000 ? 400 : 25);
+    }
+  }
+
+  /** Mise de `min` : montant vérifié, « Miser », nouvelle ligne en tête de l'historique. */
+  async function placeBid(job, min) {
+    let a = dom.auction();
+    const before = a.historyCount != null ? a.historyCount : a.history.length;
+    if (WMT.rebid.amount(a.input.value) !== min) await act.type(a.input, String(min), "montant de la mise");
+    a = dom.auction();
+    if (WMT.rebid.amount(a.input.value) !== min) throw new Error(`montant de la mise ${a.input.value} au lieu de ${min} : rien n'a été misé.`);
+    if (job.abort) throw new Aborted();
+    await act.click(a.miser, "bouton « Miser »");
+    const ok = await waitFor(job, () => {
+      const x = dom.auction();
+      if (!x) return false;
+      const n = x.historyCount != null ? x.historyCount : x.history.length;
+      return n > before && !!x.history[0] && x.history[0].amount === min;
+    }, 8000);
+    if (!ok) throw new Error(`mise de ${min} non confirmée : pas de nouvelle ligne en tête de l'« Historique des mises ».`);
+    const me = dom.auction().history[0].name;
+    if (me && pilot.me !== me) await savePilot({ ...pilot, me });
+  }
+
+  /** Étape « enchère » : moyenne, décision, mise (tout de suite ou à 12 s de la fin), retour. */
+  async function runAuction() {
+    if (marketJob || !rebidOn() || !marketActive()) return;
+    const id = location.pathname.replace(/\/+$/, "").split("/").pop();
+    const job = (marketJob = { abort: false });
+    let held = false;
+    let line = "";
+    try {
+      await hold();
+      held = true;
+      await marketReady(job);
+      await until(job, () => !!dom.auction(), 15000, "page de l'enchère illisible (bouton « Miser » introuvable).");
+      const title = dom.auction().title;
+      marketStatus(`Pilote : « ${title} », lecture de la moyenne…`);
+      const avg = await readAverage(job);
+      const factor = WMT.rebid.factorFor(config.settings, title);
+      const facts = (snipe) => {
+        const a = dom.auction();
+        return { a, min: a.min, avg, factor, balance: a.balance, remainingMs: WMT.rebid.remaining(a.remainingText), snipe };
+      };
+      let f = facts(false);
+      let d = WMT.rebid.decide(f);
+      if (d.action === "wait") {
+        log(`pilote : « ${title} » : ${d.reason}`);
+        await waitRemaining(job, WMT.rebid.SNIPE_AT, title);
+        await marketReady(job);
+        f = facts(true);
+        d = pilot.me && f.a.leader === pilot.me ? { action: "skip", reason: "tu mènes déjà" } : WMT.rebid.decide(f);
+      }
+      if (d.action === "bid") {
+        await placeBid(job, f.min);
+        line = `« ${title} » : surenchère de ${f.min} (${d.reason}).`;
+      } else {
+        line = `« ${title} » : pas de surenchère, ${d.reason}.`;
+      }
+      log(`pilote : ${line}`);
+      note(`Pilote : ${line}`, d.action === "bid" ? "ok" : "warn", null, 30000);
+      const m = pilot.market || { startedAt: Date.now(), done: [] };
+      await savePilot({ ...pilot, market: { ...m, done: [...m.done, id] } });
+      marketStatus("Pilote : retour à « Mes enchères »…");
+      const back = dom.auction() && dom.auction().back;
+      const here = location.pathname;
+      if (back) await act.click(back, "bouton « Retour au marché »");
+      // Sinon (ou sans effet au bout de 5 s) : lien du marché, ou l'adresse.
+      if (!back || !(await waitFor(job, () => location.pathname !== here, 5000))) {
+        const link = dom.navLink("/marketplace");
+        if (link) await act.click(link, "lien « Marché »");
+        else location.assign("/marketplace");
+      }
+    } catch (e) {
+      if (!(e instanceof Aborted)) stopPilot(`Surenchère du pilote interrompue : ${e.message}`);
+    } finally {
+      if (held) release();
+      marketJob = null;
+    }
+  }
+
+  function renderMarketPanel(s) {
+    const on = rebidOn();
+    ui.mInfo.textContent = on
+      ? `Active : mise minimum acceptée jusqu'à ${String(WMT.rebid.factorFor(s, "")).replace(".", ",")} × la moyenne (par défaut).`
+      : "Désactivée. Elle s'active avec le pilote, dans le panneau de la page Paquets.";
+    ui.mStop.hidden = !pilotOn();
+    if (ui.mFactor && ui.host.shadowRoot.activeElement !== ui.mFactor) {
+      const a = dom.auction();
+      const title = a ? a.title : "";
+      const per = s.rebidFactors || {};
+      ui.mFactorLabel.textContent = title ? `Facteur max pour « ${title} »` : "Facteur max pour cette carte";
+      ui.mFactor.placeholder = String(WMT.rebid.factorFor({ rebidFactor: s.rebidFactor }, ""));
+      ui.mFactor.value = title && title in per ? String(per[title]) : "";
+    }
+  }
+
+  /** Activation : confirmée une fois, comme la vente. */
+  function togglePilotRebid(on) {
+    if (!on) return setSetting("autoRebid", false);
+    renderPanel(); // reste décoché tant que ce n'est pas confirmé
+    note(`Le pilote surenchérira sur tes enchères « Surenchéri » (Marché > Mes enchères), toujours de la mise minimum, ` +
+      `si elle est inférieure à ${String(WMT.rebid.factorFor(config.settings, "")).replace(".", ",")} × la moyenne des ventes ` +
+      `(facteur réglable par carte sur la page de l'enchère) et que ton solde suffit ; à 12 s de la fin s'il reste moins de 5 min. ` +
+      `Chaque mise est débitée tout de suite (remboursée si tu es surenchéri).`, "err",
+    { label: "Oui, activer la surenchère", onclick: () => { note(null); setSetting("autoRebid", true); } });
+  }
+
+  /** Facteur de la carte de la page (vide = facteur par défaut). */
+  function setCardFactor(title, raw) {
+    const per = { ...(config.settings.rebidFactors || {}) };
+    const x = Number(String(raw).replace(",", "."));
+    if (String(raw).trim() === "" || !(x > 0)) delete per[title];
+    else per[title] = x;
+    setSetting("rebidFactors", per);
   }
 
   // --- Pilotage de la page Collection --------------------------------------------------
@@ -1628,12 +1893,37 @@
       onPulls && h("label", { class: "toggle", title: "Après l'étiquetage : vend tes cartes sans étiquette des raretés choisies dans le panneau de la Collection (favoris, shiny gardées et cartes avec une étiquette suggérée jamais vendus)." },
         h("span", {}, "Puis vendre les cartes sans étiquette"),
         ref("pilotSell", h("input", { type: "checkbox", class: "switch", onchange: (e) => togglePilotSell(e.target.checked) }))),
+      onPulls && h("label", { class: "toggle", title: "Quand le pilote attend : sur Marché > Mes enchères, resurenchérit (mise minimum) sur les enchères « Surenchéri » si le prix reste sous le facteur × la moyenne des ventes." },
+        h("span", {}, "Puis surenchérir sur mes enchères"),
+        ref("pilotRebid", h("input", { type: "checkbox", class: "switch", onchange: (e) => togglePilotRebid(e.target.checked) }))),
+      onPulls && h("label", { class: "toggle", title: "Mise minimum acceptée jusqu'à ce facteur × la moyenne des ventes de la carte. Réglable carte par carte sur la page de l'enchère." },
+        h("span", {}, "Facteur max × la moyenne"),
+        ref("rebidFactor", h("input", { type: "number", class: "num", min: "0.1", step: "0.05", onchange: (e) => {
+          const x = Number(String(e.target.value).replace(",", "."));
+          if (x > 0) setSetting("rebidFactor", x);
+          else renderPanel();
+        } }))),
       onPulls && ref("pilotStatus", h("p", { class: "muted", hidden: true })),
       onPulls && ref("pilotStop", h("button", { class: "link", hidden: true, onclick: () => stopPilot("Pilote arrêté.") }, "Arrêter le pilote")),
       onPulls && ref("autoStatus", h("p", { class: "muted", hidden: true })),
       onPulls && ref("autoStop", h("button", { class: "link", hidden: true, onclick: () => stopAll("Automatique arrêté.") }, "Arrêter")));
 
-    const sections = onPulls
+    const marketSection = () => h("section", {},
+      h("h4", {}, "Surenchère du pilote"),
+      ref("mstatus", h("p", { class: "muted", hidden: true })),
+      ref("mInfo", h("p", { class: "muted small" })),
+      route === "auction" && h("label", { class: "toggle", title: "Vide = facteur par défaut (panneau des Paquets)." },
+        ref("mFactorLabel", h("span", {}, "Facteur max pour cette carte")),
+        ref("mFactor", h("input", { type: "number", class: "num", min: "0.1", step: "0.05", onchange: (e) => {
+          const a = dom.auction();
+          if (a && a.title) setCardFactor(a.title, e.target.value);
+        } }))),
+      ref("note", h("div", { class: "note", hidden: true })),
+      ref("mStop", h("button", { class: "link", hidden: true, onclick: () => stopPilot("Pilote arrêté.") }, "Arrêter le pilote")));
+
+    const sections = onMarket()
+      ? [marketSection()]
+      : onPulls
       ? [
           h("section", {},
             h("h4", {}, "Paquets"),
@@ -1794,6 +2084,7 @@
   function renderPanel() {
     if (!ui) return;
     const s = config.settings;
+    if (onMarket()) return renderMarketPanel(s);
     ui.hl.checked = !!s.highlight;
     if (route === "pulls") {
       ui.auto.checked = !!s.autoReveal;
@@ -1803,6 +2094,9 @@
       ui.pilot.disabled = !s.autoReveal;
       ui.pilotTag.checked = s.autoTagPulled !== false;
       ui.pilotTag.disabled = !s.autoOpen;
+      ui.pilotRebid.checked = !!s.autoRebid;
+      ui.pilotRebid.disabled = !s.autoReveal;
+      if (ui.host.shadowRoot.activeElement !== ui.rebidFactor) ui.rebidFactor.value = String(WMT.rebid.factorFor(s, ""));
       ui.pilotSell.checked = !!s.autoSellPulled;
       // Activable avant le pilote : sa confirmation serait sinon effacée par l'ouverture d'un paquet.
       ui.pilotSell.disabled = !s.autoReveal;
@@ -1878,6 +2172,11 @@
     if (route === "collection" && pilotOn() && pilotWork()) {
       setTimeout(() => route === "collection" && runPilot(), 1500);
     }
+    // Surenchère : chaque page du marché reprend l'étape suivante du tour (pilot.market).
+    if (onMarket() && rebidOn() && marketActive()) {
+      const here = route;
+      setTimeout(() => route === here && (here === "market" ? runMarketList() : runAuction()), 1500);
+    }
   }
 
   function unmount() {
@@ -1888,6 +2187,7 @@
     if (scanning) scanning.abort = true;
     if (tagging) tagging.abort = true;
     if (selling) selling.abort = true;
+    if (marketJob) marketJob.abort = true;
     stopAll();
     clearHighlights();
     if (ui) ui.host.remove();
@@ -1944,6 +2244,7 @@
       if (scanning) scanning.abort = true;
       if (tagging) tagging.abort = true;
       if (selling) selling.abort = true;
+      if (marketJob) marketJob.abort = true;
       if (autoRun || chain) stopAll();
       if (msg.reason === "canceled_by_user") note("Bandeau de débogage fermé : automatique arrêté (il en a besoin pour cliquer).", "warn", null, 15000);
     }
@@ -2052,6 +2353,10 @@
     }
     .switch:checked { background: var(--accent); }
     .switch:checked::after { transform: translateX(14px); }
+    .num {
+      width: 64px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px;
+      background: var(--surface-2); color: var(--ink); font: inherit; text-align: right;
+    }
     .bar { height: 6px; margin: 8px 0 4px; overflow: hidden; border-radius: 999px; background: var(--line); }
     .bar i { display: block; width: 0; height: 100%; background: var(--accent); transition: width .25s; }
     .note { margin-top: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; font-size: 12.5px; }

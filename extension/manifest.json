@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "WikiMasters Tagger",
-  "version": "0.10.0",
-  "description": "Analyse ta collection WikiMasters, propose des étiquettes, les pose à ta demande, vend à ta demande les cartes sans étiquette, surligne les cartes à étiqueter, te prévient quand tes paquets sont pleins et, si tu l'actives, collecte des données du marché en lecture seule.",
+  "version": "0.11.0",
+  "description": "Analyse ta collection WikiMasters, propose des étiquettes, les pose à ta demande, vend à ta demande les cartes sans étiquette, surligne les cartes à étiqueter, te prévient quand tes paquets sont pleins et, si tu l'actives, collecte des données du marché en lecture seule ; son pilote peut aussi surenchérir sur tes enchères.",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -52,6 +52,7 @@
         "lib/rhythm.js",
         "lib/dom.js",
         "lib/act.js",
+        "lib/rebid.js",
         "content/content.js"
       ],
       "css": [

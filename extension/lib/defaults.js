@@ -976,6 +976,9 @@
       "autoOpen": false,
       "autoTagPulled": true,
       "autoSellPulled": false,
+      "autoRebid": false,
+      "rebidFactor": 1.0,
+      "rebidFactors": {},
       "sellRarities": [],
       "sellKeep": true
     }

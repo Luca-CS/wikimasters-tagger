@@ -26,9 +26,9 @@ const { store, defaults } = globalThis.WMT;
 test("premier lancement : config par défaut enregistrée", async () => {
   delete data.config;
   const c = await store.getConfig();
-  assert.equal(c.version, 5);
+  assert.equal(c.version, 6);
   assert.equal(c.settings.revealDelay, 200);
-  assert.equal(data.config.version, 5);
+  assert.equal(data.config.version, 6);
   assert.ok(c.rules.some((r) => r.shiny && r.name === "Shiny"));
 });
 
@@ -38,7 +38,7 @@ test("migration v1 → v2 : l'ancien délai par défaut (1,5 s) passe à 0,2 s",
   const c = await store.getConfig();
   assert.equal(c.settings.revealDelay, 200);
   assert.equal(c.settings.accountType, "pro"); // les autres réglages sont conservés
-  assert.equal(data.config.version, 5);
+  assert.equal(data.config.version, 6);
 });
 
 // Règle Ski telle qu'elle était dans les valeurs par défaut de la v2.
@@ -93,11 +93,22 @@ test("migration v3 → v4 : Finance et Physique ajoutées avant Shiny, tes étiq
   const shiny = c.rules.find((r) => r.shiny);
   data.config = { ...c, version: 3, rules: [mine, { name: "Finance", color: "#999999", keywords: ["perso"] }, shiny] };
   const got = await store.getConfig();
-  assert.equal(got.version, 5);
-  assert.deepEqual(got.rules.map((r) => r.name), ["Maths", "Finance", "Physique", "Plateau de Saclay", "Shiny"]);
+  assert.equal(got.version, 6);
+  assert.deepEqual(got.rules.map((r) => r.name), ["Maths", "Finance", "Physique", "Plateau de Saclay", "Tech", "Shiny"]);
   assert.deepEqual(got.rules[0].keywords, ["mon motif"]); // étiquette existante inchangée
   assert.deepEqual(got.rules[1].keywords, ["perso"]); // Finance déjà présente : gardée telle quelle
   assert.ok(got.rules[2].keywords.length > 5);
+});
+
+test("migration v5 → v6 : Tech ajoutée avant Shiny, rien d'autre ne revient", async () => {
+  const c = defaults.config();
+  const shiny = c.rules.find((r) => r.shiny);
+  const maths = c.rules.find((r) => r.name === "Maths");
+  data.config = { ...c, version: 5, rules: [maths, shiny] };
+  const got = await store.getConfig();
+  assert.equal(got.version, 6);
+  assert.deepEqual(got.rules.map((r) => r.name), ["Maths", "Tech", "Shiny"]);
+  assert.ok(got.rules[1].keywords.length > 20);
 });
 
 test("migration v4 → v5 : Plateau de Saclay ajoutée (transversale) avant Shiny, rien d'autre ne revient", async () => {
@@ -106,8 +117,8 @@ test("migration v4 → v5 : Plateau de Saclay ajoutée (transversale) avant Shin
   const maths = c.rules.find((r) => r.name === "Maths");
   data.config = { ...c, version: 4, rules: [maths, shiny] }; // les autres étiquettes par défaut supprimées
   const got = await store.getConfig();
-  assert.equal(got.version, 5);
-  assert.deepEqual(got.rules.map((r) => r.name), ["Maths", "Plateau de Saclay", "Shiny"]);
+  assert.equal(got.version, 6);
+  assert.deepEqual(got.rules.map((r) => r.name), ["Maths", "Plateau de Saclay", "Tech", "Shiny"]);
   assert.equal(got.rules[1].cross, true);
   assert.ok(got.rules[1].titleKeywords.length > 10);
 });

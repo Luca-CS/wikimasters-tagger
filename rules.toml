@@ -176,6 +176,34 @@ keywords = [
 ]
 title_keywords = ["\\((physique|unite|mecanique|optique|electromagnetisme)\\)", "^constante de ", "^effet (doppler|joule|photoelectrique|compton|tunnel|hall|zeeman|stark|casimir|kerr|faraday|peltier|seebeck|thomson|cherenkov|tcherenkov|meissner|mpemba|magnus|venturi|coanda)"]
 
+[tags."Tech"]  # technologie : informatique, internet, électronique, IA, entreprises du secteur
+# Pas les jeux vidéo (culture, pas technologie), sauf les consoles. Pas « numérique » seul
+# (analyse numérique = Maths), ni « électronique » après « musique » ou « cigarette », ni les
+# marques citées dans une description (« série diffusée sur Amazon ») sauf pour leurs dirigeants.
+keywords = [
+  "informatiques?", "informaticien\\w*", "logiciels?", "systemes? d'exploitation", "langages? de programmation", "programmeur\\w*",
+  "ordinateurs?", "(nano|micro|mini)-?ordinateurs?", "superordinateurs?", "(micro)?processeurs?",
+  "circuits? integres?", "composants? electroniques?", "(?<!musique )(?<!cigarette )electroniques?",
+  "peripheriques? (de stockage|informatiques?|d'entree|de sortie)", "stockage (de|des) donnees", "bases? de donnees",
+  "internet", "sites? (web|internet)", "navigateurs? (web|internet)", "web (2\\.0|3|semantique)", "applications? (mobiles?|web|de messagerie)",
+  "moteurs? de recherche", "reseaux? sociaux?", "reseau social", "messagerie instantanee", "plateformes? (en ligne|numeriques?)",
+  "intelligence artificielle", "apprentissage (automatique|profond)", "reseaux? de neurones", "modeles? de langage",
+  "chatbots?", "agents? conversationnels?", "robotique", "robots?", "realite (virtuelle|augmentee)", "metavers",
+  "smartphones?", "telephones? (mobiles?|portables?|intelligents?)", "tablettes? (tactiles?|numeriques?)", "objets? connectes?",
+  "impr(imante|ession) 3d", "consoles? de jeux?( video)?", "consoles? portables?",
+  "telecommunications?", "operateurs? (de telecommunications|telephoniques?|mobiles?)", "fournisseurs? d'acces",
+  "haute technologie", "high-tech", "nouvelles technologies", "technologies? (de l'information|numeriques?|informatiques?)",
+  "(transformation|economie|revolution|ere|service|services) numeriques?", "entreprises? (\\w+ )?(technologiques?|du numerique|de (la )?technologie)",
+  "start-?ups?", "silicon valley", "gafam?", "big tech", "cybersecurite", "cyberattaques?", "hacker\\w*",
+  "(fabricant|fondeur)s? de (semi-conducteurs|puces)",
+  "(co-?fondat\\w*|pdg|dirigeant\\w*|directeur general|directrice generale) (de |d')(apple|microsoft|google|alphabet|facebook|meta|amazon|tesla|openai|anthropic|nvidia|intel|oracle|netflix|paypal|twitter|ibm|spacex)",
+]
+title_keywords = [
+  "\\((informatique|logiciel|langage|langage de programmation|site web|application|internet|reseau social|technologie|electronique|intelligence artificielle|modele de langage)\\)",
+  "^(google|apple|microsoft|nvidia|intel|ibm|amd|oracle|openai|anthropic|samsung( electronics)?|huawei|xiaomi|tencent|alibaba|baidu|netflix|spotify|uber|airbnb|paypal|tiktok|instagram|whatsapp|youtube|linkedin|facebook|twitter|meta( platforms)?|amazon|tesla|android|linux|unix|windows|macos|ios|iphone|ipad|macintosh|chatgpt|wikipedia|wikimedia)( \\((entreprise|societe|systeme d'exploitation|logiciel|site web|reseau social)\\))?$",
+  "^(microsoft|google|apple|adobe|amazon) ", "internet",
+]
+
 [tags."Plateau de Saclay"]  # écoles, labos, communes, rivières et personnes du plateau
 # Transversale : posée en plus de la catégorie, même sur une carte déjà étiquetée (Albert Fert
 # reste en Physique et reçoit aussi Plateau de Saclay). Seulement sur les indices de la carte

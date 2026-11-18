@@ -3,7 +3,7 @@
 (function (root) {
   const WMT = (root.WMT = root.WMT || {});
   const DEFAULTS = {
-    "version": 5,
+    "version": 6,
     "rules": [
       {
         "name": "Cinéma/Séries/Acteurs",
@@ -511,8 +511,81 @@
         ]
       },
       {
-        "name": "Plateau de Saclay",
+        "name": "Tech",
         "color": "#4ade80",
+        "keywords": [
+          "informatiques?",
+          "informaticien\\w*",
+          "logiciels?",
+          "systemes? d'exploitation",
+          "langages? de programmation",
+          "programmeur\\w*",
+          "ordinateurs?",
+          "(nano|micro|mini)-?ordinateurs?",
+          "superordinateurs?",
+          "(micro)?processeurs?",
+          "circuits? integres?",
+          "composants? electroniques?",
+          "(?<!musique )(?<!cigarette )electroniques?",
+          "peripheriques? (de stockage|informatiques?|d'entree|de sortie)",
+          "stockage (de|des) donnees",
+          "bases? de donnees",
+          "internet",
+          "sites? (web|internet)",
+          "navigateurs? (web|internet)",
+          "web (2\\.0|3|semantique)",
+          "applications? (mobiles?|web|de messagerie)",
+          "moteurs? de recherche",
+          "reseaux? sociaux?",
+          "reseau social",
+          "messagerie instantanee",
+          "plateformes? (en ligne|numeriques?)",
+          "intelligence artificielle",
+          "apprentissage (automatique|profond)",
+          "reseaux? de neurones",
+          "modeles? de langage",
+          "chatbots?",
+          "agents? conversationnels?",
+          "robotique",
+          "robots?",
+          "realite (virtuelle|augmentee)",
+          "metavers",
+          "smartphones?",
+          "telephones? (mobiles?|portables?|intelligents?)",
+          "tablettes? (tactiles?|numeriques?)",
+          "objets? connectes?",
+          "impr(imante|ession) 3d",
+          "consoles? de jeux?( video)?",
+          "consoles? portables?",
+          "telecommunications?",
+          "operateurs? (de telecommunications|telephoniques?|mobiles?)",
+          "fournisseurs? d'acces",
+          "haute technologie",
+          "high-tech",
+          "nouvelles technologies",
+          "technologies? (de l'information|numeriques?|informatiques?)",
+          "(transformation|economie|revolution|ere|service|services) numeriques?",
+          "entreprises? (\\w+ )?(technologiques?|du numerique|de (la )?technologie)",
+          "start-?ups?",
+          "silicon valley",
+          "gafam?",
+          "big tech",
+          "cybersecurite",
+          "cyberattaques?",
+          "hacker\\w*",
+          "(fabricant|fondeur)s? de (semi-conducteurs|puces)",
+          "(co-?fondat\\w*|pdg|dirigeant\\w*|directeur general|directrice generale) (de |d')(apple|microsoft|google|alphabet|facebook|meta|amazon|tesla|openai|anthropic|nvidia|intel|oracle|netflix|paypal|twitter|ibm|spacex)"
+        ],
+        "titleKeywords": [
+          "\\((informatique|logiciel|langage|langage de programmation|site web|application|internet|reseau social|technologie|electronique|intelligence artificielle|modele de langage)\\)",
+          "^(google|apple|microsoft|nvidia|intel|ibm|amd|oracle|openai|anthropic|samsung( electronics)?|huawei|xiaomi|tencent|alibaba|baidu|netflix|spotify|uber|airbnb|paypal|tiktok|instagram|whatsapp|youtube|linkedin|facebook|twitter|meta( platforms)?|amazon|tesla|android|linux|unix|windows|macos|ios|iphone|ipad|macintosh|chatgpt|wikipedia|wikimedia)( \\((entreprise|societe|systeme d'exploitation|logiciel|site web|reseau social)\\))?$",
+          "^(microsoft|google|apple|adobe|amazon) ",
+          "internet"
+        ]
+      },
+      {
+        "name": "Plateau de Saclay",
+        "color": "#38bdf8",
         "keywords": [
           "saclay",
           "universite paris-sud",
@@ -803,33 +876,8 @@
         "titleKeywords": []
       },
       {
-        "name": "Tech/Informatique",
-        "color": "#2dd4bf",
-        "keywords": [
-          "logiciel",
-          "application",
-          "systeme d'exploitation",
-          "langage de programmation",
-          "site web",
-          "reseau social",
-          "jeu video",
-          "console de jeux?",
-          "informatique",
-          "smartphone",
-          "moteur de recherche"
-        ],
-        "titleKeywords": [
-          "playstation",
-          "nintendo",
-          "xbox",
-          "microsoft",
-          "google",
-          "apple"
-        ]
-      },
-      {
         "name": "Entreprises/Marques",
-        "color": "#fda4af",
+        "color": "#2dd4bf",
         "keywords": [
           "entreprise",
           "societe",
@@ -843,7 +891,7 @@
       },
       {
         "name": "Religion",
-        "color": "#93c5fd",
+        "color": "#fda4af",
         "keywords": [
           "pape",
           "saint",
@@ -862,7 +910,7 @@
       },
       {
         "name": "Arts",
-        "color": "#fbbf24",
+        "color": "#93c5fd",
         "keywords": [
           "peintre",
           "sculpteur",
@@ -881,7 +929,7 @@
       },
       {
         "name": "Médias/TV",
-        "color": "#a78bfa",
+        "color": "#fbbf24",
         "keywords": [
           "animateur",
           "animatrice",
@@ -899,7 +947,7 @@
       },
       {
         "name": "Listes Wikipédia",
-        "color": "#f472b6",
+        "color": "#a78bfa",
         "keywords": [
           "page de liste de wikimedia",
           "liste"
@@ -927,6 +975,7 @@
       "autoChain": true,
       "autoOpen": false,
       "autoTagPulled": true,
+      "autoSellPulled": false,
       "sellRarities": [],
       "sellKeep": true
     }

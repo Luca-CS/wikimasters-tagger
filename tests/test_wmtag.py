@@ -94,13 +94,33 @@ class TestClassify(unittest.TestCase):
         for title, desc, want in cases:
             self.assertEqual(self.tags(desc, title=title)[:1], [want], title)
 
+    def test_tech(self):
+        for desc, title in [
+            ("logiciel informatique", "Sente (logiciel)"), ("nano-ordinateur", "Raspberry Pi"),
+            ("entreprise américaine en intelligence artificielle", "Anthropic"),
+            ("chatbot développé par Anthropic", "Claude (modèle de langage)"),
+            ("navigateur web sans interface graphique", "Navigateur headless"),
+            ("", "Internet Exchange Point"), ("", "Google"),
+            ("entrepreneur américain, cofondateur d'Apple", "Steve Jobs"),
+            ("start-up française de la Silicon Valley", "Exemple"),
+        ]:
+            self.assertIn("Tech", self.tags(desc, title=title), title)
+        # pas de faux positifs
+        for desc, title in [
+            ("groupe de musique électronique", "Daft Punk"), ("branche des mathématiques", "Analyse numérique"),
+            ("série télévisée diffusée sur Amazon", "The Boys"), ("journaliste spécialiste de l'information", "Exemple"),
+            ("jeu vidéo de 2022", "Splatoon 3"), ("physicien et inventeur serbe", "Nikola Tesla"),
+            ("unité de mesure", "Tesla (unité)"),
+        ]:
+            self.assertNotIn("Tech", self.tags(desc, title=title), title)
+
     def test_finance_physique(self):
         self.assertEqual(self.tags("indice boursier"), ["Finance"])
         self.assertEqual(self.tags("banque ivoirienne"), ["Finance"])
         self.assertEqual(self.tags("notation d'un état quantique"), ["Physique"])
         self.assertEqual(self.tags("", title="Effet Doppler"), ["Physique"])
         # pas de faux positifs sur les sens courants
-        self.assertEqual(self.tags("composant électronique de puissance"), [])
+        self.assertEqual(self.tags("composant électronique de puissance"), ["Tech"])  # pas Physique
         self.assertEqual(self.tags("cérémonie d'investiture"), [])
 
     def test_title_qualifier_counts_as_description(self):

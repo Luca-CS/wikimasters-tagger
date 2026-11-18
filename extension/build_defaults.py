@@ -41,7 +41,7 @@ def rules(path: Path, offset: int = 0) -> list[dict]:
 def main():
     cfg = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))
     config = {
-        "version": 5,
+        "version": 6,
         "rules": rules(ROOT / "rules.toml"),
         "themes": rules(ROOT / "themes.toml", offset=5),
         "settings": {
@@ -66,6 +66,8 @@ def main():
             # caché, puis étiquette les cartes tirées dans la Collection. Désactivé par défaut.
             "autoOpen": False,
             "autoTagPulled": True,
+            # Puis vente des cartes sans étiquette (raretés ci-dessous), confirmée en l'activant.
+            "autoSellPulled": False,
             # Vente (défausse) des cartes sans étiquette : raretés choisies dans le panneau,
             # favoris et cartes shiny gardés.
             "sellRarities": [],

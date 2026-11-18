@@ -11,6 +11,8 @@
 //   pilot         pilote : 2 paquets, état gardé dans sessionStorage (la page est quittée pour la
 //                 Collection puis rechargée), un paquet de plus 10 s après le stock vide ; les
 //                 cartes tirées sont transmises à la Collection de test (__simPulled)
+//   pilotsell     (avec pilot) vente par le pilote après l'étiquetage (PC à vendre)
+//   tagfail       (avec pilotsell) l'étiquette de Limahl n'est pas enregistrée : contrôle du pilote
 (function () {
   if (STATE !== "chain") return;
   const DECK = [

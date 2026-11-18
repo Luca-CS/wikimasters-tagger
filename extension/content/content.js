@@ -40,7 +40,7 @@
     scanMeta = await store.get("scanMeta");
     packsState = await store.get("packs");
     tagResume = await store.get("tagRun");
-    pilot = (await store.get("pilot")) || { pending: [] };
+    pilot = pilotState(await store.get("pilot"));
     memo = new Map();
   }
 
@@ -59,7 +59,7 @@
       if (ch.scanMeta) scanMeta = ch.scanMeta.newValue || null;
       if (ch.packs) packsState = ch.packs.newValue || null;
       if (ch.tagRun) tagResume = ch.tagRun.newValue || null;
-      if (ch.pilot) pilot = ch.pilot.newValue || { pending: [] };
+      if (ch.pilot) pilot = pilotState(ch.pilot.newValue);
       if (route) {
         renderPanel();
         scheduleRefresh();
@@ -520,9 +520,11 @@
     if (ui.pilotStatus) {
       const on = pilotOn();
       const todo = pilot.pending.length;
+      const toSell = pilotSells() ? pilot.toSell.length : 0;
       ui.pilotStatus.hidden = !on;
       ui.pilotStatus.textContent = !on ? "" : chain || autoRun ? "Pilote : ouverture en cours." :
-        `Pilote actif : en attente d'un paquet${todo ? ` · ${plural(todo, "carte tirée")} à étiqueter` : ""}.`;
+        `Pilote actif : en attente d'un paquet${todo ? ` · ${plural(todo, "carte tirée")} à étiqueter` : ""}` +
+        `${toSell ? ` · ${plural(toSell, "carte tirée")} à vendre` : ""}.`;
       ui.pilotStop.hidden = !on;
     }
   }
@@ -639,8 +641,18 @@
   // Il s'arrête par « Arrêter le pilote », et pour de bon sur une sanction ou un refus du site
   // (le réglage est alors coupé). Les cartes à étiqueter sont gardées dans le stockage (clé
   // pilot) : après un rechargement de la page, le pilote reprend où il en était.
+  //
+  // Vente (décidée le 18/11/2026, « Puis vendre les cartes sans étiquette », confirmée une fois
+  // en l'activant) : après l'étiquetage, si une carte tirée est à vendre (rareté choisie, sans
+  // étiquette suggérée), le pilote lance la vente habituelle des cartes sans étiquette des
+  // raretés choisies. Point de contrôle : une carte que le pilote vient d'étiqueter et qui
+  // apparaît « Sans étiquette » (étiquette non enregistrée par le jeu) arrête tout, sans rien
+  // vendre sur la page ; une carte qui a une étiquette suggérée n'est jamais vendue par le pilote.
 
-  let pilot = { pending: [] }; // {pending: titres des cartes tirées à étiqueter}
+  let pilot = pilotState(); // {pending: cartes tirées à étiqueter, toSell: cartes tirées à vendre}
+  function pilotState(v) {
+    return { pending: [], toSell: [], ...(v || {}) };
+  }
   let pilotBusy = false;
   let pilotTimer = 0;
   let pilotHeld = false;
@@ -667,13 +679,35 @@
     return true;
   }
 
-  /** Retient une carte tirée qui a des étiquettes à poser. */
+  /** Étiquettes suggérées qui protègent une carte de la vente (Shiny seule ne compte pas). */
+  const protective = (matches) => matches.filter((m) => !(rules.find((r) => r.name === m.tag) || {}).shiny);
+
+  /** Le pilote vend-il après l'étiquetage ? (réglage, et au moins une rareté choisie) */
+  const pilotSells = () => !!(config.settings.autoSellPulled && (config.settings.sellRarities || []).length);
+
+  /** Carte tirée que la vente du pilote retirerait. */
+  function pilotSellable(card, matches) {
+    const keep = config.settings.sellKeep !== false;
+    return pilotSells() && (config.settings.sellRarities || []).includes(card.rarity) && !(keep && card.shiny) && !protective(matches).length;
+  }
+
+  /** Retient une carte tirée qui a des étiquettes à poser, ou qui sera à vendre. */
   function pilotRemember(card, matches) {
-    if (!pilotOn() || !config.settings.autoTagPulled || !matches.length) return;
-    if (pilot.pending.includes(card.title)) return;
-    pilot = { ...pilot, pending: [...pilot.pending, card.title] };
+    if (!pilotOn()) return;
+    let next = pilot;
+    if (config.settings.autoTagPulled && matches.length && !next.pending.includes(card.title)) {
+      next = { ...next, pending: [...next.pending, card.title] };
+    }
+    if (pilotSellable(card, matches) && !next.toSell.includes(card.title)) {
+      next = { ...next, toSell: [...next.toSell, card.title] };
+    }
+    if (next === pilot) return;
+    pilot = next;
     safe(() => store.set("pilot", pilot));
   }
+
+  /** Le pilote a-t-il à faire sur la Collection ? */
+  const pilotWork = () => (config.settings.autoTagPulled && pilot.pending.length > 0) || (pilotSells() && pilot.toSell.length > 0);
 
   /** Notification Chrome (onglet caché) : une seule fois par message. */
   function pilotAlert(text) {
@@ -741,7 +775,7 @@
     try {
       if (!(await pilotClaim())) return; // un autre onglet pilote déjà
       if (live.count < 1) {
-        if (config.settings.autoTagPulled && pilot.pending.length) await pilotGo("/collection");
+        if (pilotWork()) await pilotGo("/collection");
         return;
       }
       const b = dom.openButton();
@@ -760,10 +794,32 @@
     }
   }
 
-  /** Étiquetage des cartes tirées, sur la Collection, puis retour aux Paquets. */
+  /** Travail du pilote sur la Collection : étiquetage, vente, puis retour aux Paquets. */
+  let pilotRunning = false;
+  async function runPilot() {
+    if (pilotRunning || scanning || tagging || selling || route !== "collection" || !pilotOn()) return;
+    pilotRunning = true;
+    try {
+      let tagged = new Set();
+      if (config.settings.autoTagPulled && pilot.pending.length) {
+        const r = await runPilotTag();
+        if (!r.ok) return;
+        tagged = r.tagged;
+      }
+      if (pilotOn() && pilotSells() && pilot.toSell.length) {
+        if (!(await runSell({ pilot: true, tagged }))) return;
+      }
+      if (pilotOn()) await pilotGo("/pulls").catch((e) => stopPilot(`Pilote arrêté : ${e.message}`));
+    } finally {
+      pilotRunning = false;
+    }
+  }
+
+  /** Étiquetage des cartes tirées, sur la Collection. Renvoie {ok, tagged: titres étiquetés}. */
   async function runPilotTag() {
-    if (scanning || tagging || selling || route !== "collection") return;
+    if (scanning || tagging || selling || route !== "collection") return { ok: false, tagged: new Set() };
     const job = (tagging = { abort: false, pilot: true });
+    const tagged = new Set();
     const stats = { applied: 0, pages: 0, failed: 0, byTag: new Map(), skipped: new Map() };
     const missing = new Set();
     const pending = new Set(pilot.pending);
@@ -805,9 +861,12 @@
         }
         for (const [tag, items] of plan) {
           ui.ptext.textContent = `Pilote : ${tag} (${plural(items.length, "carte")}) · ${plural(stats.applied, "étiquette")} posées`;
+          const failedBefore = stats.failed;
           if (missing.has(tag) || !(await applyTag(job, tag, items, stats))) {
             missing.add(tag);
             stats.skipped.set(tag, (stats.skipped.get(tag) || 0) + items.length);
+          } else if (stats.failed === failedBefore) {
+            items.forEach((it) => tagged.add(it.title)); // étiquette posée : à vérifier avant la vente
           }
           await step(job, 250);
         }
@@ -840,10 +899,8 @@
         renderPanel();
       }
       refresh();
-      if (done && !job.abort && pilotOn()) {
-        await pilotGo("/pulls").catch((e) => stopPilot(`Pilote arrêté : ${e.message}`));
-      }
     }
+    return { ok: done && !job.abort && pilotOn(), tagged };
   }
 
   // --- Pilotage de la page Collection --------------------------------------------------
@@ -1298,27 +1355,45 @@
     await act.click(first.h3, `carte « ${sell[0].title} »`);
     await until(job, () => !!dom.selectionBar(), 5000, "barre de sélection introuvable.");
     await step(job);
-    const all = dom.barButton(dom.selectionBar(), /^Tout sélectionner/);
-    if (all) {
-      await act.click(all, "bouton « Tout sélectionner (page) »");
-      await step(job, 300);
+    // « Tout sélectionner » est grisé pendant « Actualisation… » : on attend qu'il soit actif,
+    // on vérifie que la sélection a pris, et on réessaie une fois sinon.
+    const allButton = () => dom.selectionBar() && dom.barButton(dom.selectionBar(), /^Tout sélectionner/);
+    for (let attempt = 0; attempt < 2 && allButton(); attempt++) {
+      await waitFor(job, () => {
+        const bar = dom.selectionBar();
+        const b = allButton();
+        return bar && !bar.refreshing && b && !b.disabled;
+      }, 5000);
+      if (job.abort) throw new Aborted();
+      await act.click(allButton(), "bouton « Tout sélectionner (page) »");
+      if (await waitFor(job, () => {
+        const bar = dom.selectionBar();
+        return bar && !bar.refreshing && bar.count >= sell.length;
+      }, 3000)) break;
     }
+    await step(job, 300);
+    // Favoris (verrouillés) et échanges en attente : le site les retire lui-même de
+    // « Défausser (+N) », inutile de les désélectionner. Seules les cartes gardées non
+    // verrouillées (shiny, étiquette suggérée pour le pilote) sont décochées.
     for (const c of kept) {
-      if (dom.pendingTrade(c)) continue; // déjà exclue par le site
+      if (dom.pendingTrade(c) || dom.isStarred(c)) continue;
       const cur = findCard(c);
       if (cur) {
         await act.click(cur.h3, `carte « ${c.title} »`);
         await step(job);
       }
     }
-    await until(job, () => {
+    const discardButton = () => dom.selectionBar() && dom.barButton(dom.selectionBar(), /^Défausser \(\+\d+\)$/);
+    const offeredBy = (b) => (b ? +dom.clean(b.textContent).match(/\+(\d+)/)[1] : -1);
+    await waitFor(job, () => {
       const bar = dom.selectionBar();
-      return bar && !bar.refreshing && bar.count === sell.length;
-    }, 5000, `sélection incohérente (${(dom.selectionBar() || {}).count} cartes au lieu de ${sell.length}) : rien n'a été vendu.`);
-    const discard = dom.barButton(dom.selectionBar(), /^Défausser \(\+\d+\)$/);
+      const b = discardButton();
+      return bar && !bar.refreshing && b && !b.disabled && offeredBy(b) === sell.length;
+    }, 5000);
+    if (job.abort) throw new Aborted();
+    const discard = discardButton();
     if (!discard || discard.disabled) throw new Error("bouton « Défausser » introuvable.");
-    // Le site retire lui-même du compte les cartes verrouillées (favoris, échange en attente).
-    const offered = +dom.clean(discard.textContent).match(/\+(\d+)/)[1];
+    const offered = offeredBy(discard);
     if (offered !== sell.length) {
       throw new Error(`le site défausserait ${offered} cartes au lieu de ${sell.length} (carte verrouillée non reconnue ?) : rien n'a été vendu.`);
     }
@@ -1346,7 +1421,7 @@
 
   function sellSummary(stats) {
     return `${plural(stats.sold, "carte")} vendue${stats.sold > 1 ? "s" : ""} (+${stats.sold} wikibidou${stats.sold > 1 ? "s" : ""})` +
-      (stats.kept.size ? `, ${plural(stats.kept.size, "carte")} gardée${stats.kept.size > 1 ? "s" : ""} (favoris, shiny ou échange en cours).` : ".");
+      (stats.kept.size ? `, ${plural(stats.kept.size, "carte")} gardée${stats.kept.size > 1 ? "s" : ""} (favoris, shiny, échange en cours${selling && selling.pilot ? " ou étiquette suggérée" : ""}).` : ".");
   }
 
   function askSell() {
@@ -1360,16 +1435,26 @@
   function stopSelling() {
     if (!selling || selling.abort) return;
     selling.abort = true;
+    if (selling.pilot) stopPilot("Pilote arrêté.");
     log("vente arrêtée depuis le panneau");
   }
 
-  async function runSell() {
-    if (scanning || tagging || selling || route !== "collection") return;
+  /**
+   * Vente des cartes sans étiquette des raretés choisies. Avec `pilot` : lancée par le pilote,
+   * qui ne vend jamais une carte ayant une étiquette suggérée, et s'arrête si une carte qu'il
+   * vient d'étiqueter (`tagged`) apparaît sans étiquette. Renvoie vrai si la vente est allée au bout.
+   */
+  async function runSell({ pilot: byPilot = false, tagged = new Set() } = {}) {
+    if (scanning || tagging || selling || route !== "collection") return false;
     const rarities = new Set(config.settings.sellRarities || []);
-    if (!rarities.size) return askSell();
+    if (!rarities.size) {
+      if (!byPilot) askSell();
+      return byPilot;
+    }
     const keep = config.settings.sellKeep !== false;
-    const job = (selling = { abort: false });
+    const job = (selling = { abort: false, pilot: byPilot });
     const stats = { sold: 0, kept: new Set() };
+    let ok = false;
     note(null);
     renderPanel();
     ui.progress.hidden = false;
@@ -1393,8 +1478,17 @@
         if (wrong) {
           throw new Error(`carte inattendue malgré les filtres : « ${wrong.title} » ${wrong.tags.length ? "a une étiquette" : `est ${wrong.rarity}`}. Rien n'a été vendu sur cette page.`);
         }
+        if (byPilot) {
+          // Point de contrôle du pilote : une carte qu'il vient d'étiqueter doit être protégée.
+          const unsaved = cards.find((c) => tagged.has(c.title));
+          if (unsaved) {
+            throw new Error(`« ${unsaved.title} » vient d'être étiquetée par l'extension mais le jeu l'affiche sans étiquette. Rien n'a été vendu sur cette page.`);
+          }
+        }
         // Favoris et échanges en attente : verrouillés par le site, jamais défaussables.
-        const kept = cards.filter((c) => dom.isStarred(c) || dom.pendingTrade(c) || (keep && c.shiny));
+        // Pilote : une carte avec une étiquette suggérée n'est jamais vendue.
+        const kept = cards.filter((c) => dom.isStarred(c) || dom.pendingTrade(c) || (keep && c.shiny) ||
+          (byPilot && protective(suggestionsFor(c)).length > 0));
         kept.forEach((c) => stats.kept.add(c.title));
         const sell = cards.filter((c) => !kept.includes(c));
         ui.ptext.textContent = `Page ${p.page} / ${p.total} · ${plural(stats.sold, "carte")} vendue${stats.sold > 1 ? "s" : ""}`;
@@ -1407,11 +1501,17 @@
         }
         await sellPage(job, sell, kept, stats);
       }
+      ok = true;
       log("vente terminée :", sellSummary(stats));
-      note(`✓ ${sellSummary(stats)}`, "ok");
+      note(`✓ ${byPilot ? "Pilote : " : ""}${sellSummary(stats)}`, "ok", null, byPilot ? 30000 : 0);
+      if (byPilot) {
+        pilot = { ...pilot, toSell: [] };
+        await safe(() => store.set("pilot", pilot));
+      }
     } catch (e) {
       log("vente interrompue :", e && e.message);
       if (e instanceof Aborted) note(`Vente arrêtée. ${sellSummary(stats)}`, "warn");
+      else if (byPilot) stopPilot(`Vente du pilote interrompue : ${e.message} ${sellSummary(stats)} Pilote arrêté.`);
       else note(`Vente interrompue : ${e.message} ${sellSummary(stats)}`, "err");
     } finally {
       await leaveSelection();
@@ -1431,6 +1531,7 @@
       }
       refresh();
     }
+    return ok && !job.abort;
   }
 
   function progress(p, pages) {
@@ -1524,6 +1625,9 @@
       onPulls && h("label", { class: "toggle", title: "Une fois le stock vide : étiquette les cartes tirées dans la Collection, puis revient ici." },
         h("span", {}, "Puis étiqueter les cartes tirées"),
         ref("pilotTag", h("input", { type: "checkbox", class: "switch", onchange: (e) => setSetting("autoTagPulled", e.target.checked) }))),
+      onPulls && h("label", { class: "toggle", title: "Après l'étiquetage : vend tes cartes sans étiquette des raretés choisies dans le panneau de la Collection (favoris, shiny gardées et cartes avec une étiquette suggérée jamais vendus)." },
+        h("span", {}, "Puis vendre les cartes sans étiquette"),
+        ref("pilotSell", h("input", { type: "checkbox", class: "switch", onchange: (e) => togglePilotSell(e.target.checked) }))),
       onPulls && ref("pilotStatus", h("p", { class: "muted", hidden: true })),
       onPulls && ref("pilotStop", h("button", { class: "link", hidden: true, onclick: () => stopPilot("Pilote arrêté.") }, "Arrêter le pilote")),
       onPulls && ref("autoStatus", h("p", { class: "muted", hidden: true })),
@@ -1664,6 +1768,20 @@
     await safe(() => store.saveConfig(config));
   }
 
+  /** Vente par le pilote : confirmée une fois, en l'activant (comme la vente manuelle). */
+  function togglePilotSell(on) {
+    if (!on) return setSetting("autoSellPulled", false);
+    renderPanel(); // reste décoché tant que ce n'est pas confirmé
+    const rarities = RARITY_ORDER.filter((r) => (config.settings.sellRarities || []).includes(r));
+    if (!rarities.length) {
+      return note("Choisis d'abord les raretés à vendre dans le panneau de la Collection.", "warn", null, 8000);
+    }
+    note(`Après chaque étiquetage, le pilote vendra toutes tes cartes sans étiquette de rareté ${rarities.join(", ")} ` +
+      `(pas seulement les cartes tirées). Irréversible : 1 wikibidou par carte. Gardées : favoris` +
+      `${config.settings.sellKeep !== false ? ", shiny" : ""} et cartes avec une étiquette suggérée.`, "err",
+    { label: "Oui, activer la vente", onclick: () => { note(null); setSetting("autoSellPulled", true); } });
+  }
+
   function toggleSellRarity(r) {
     const cur = new Set(config.settings.sellRarities || []);
     cur.has(r) ? cur.delete(r) : cur.add(r);
@@ -1685,6 +1803,9 @@
       ui.pilot.disabled = !s.autoReveal;
       ui.pilotTag.checked = s.autoTagPulled !== false;
       ui.pilotTag.disabled = !s.autoOpen;
+      ui.pilotSell.checked = !!s.autoSellPulled;
+      // Activable avant le pilote : sa confirmation serait sinon effacée par l'ouverture d'un paquet.
+      ui.pilotSell.disabled = !s.autoReveal;
       renderPacks();
       renderAuto();
       return;
@@ -1754,8 +1875,8 @@
     maybePrompt();
     // Pilote : attente des paquets sur les Paquets, étiquetage des cartes tirées sur la Collection.
     if (route === "pulls") startPilot();
-    if (route === "collection" && pilotOn() && config.settings.autoTagPulled && pilot.pending.length) {
-      setTimeout(() => route === "collection" && runPilotTag(), 1500);
+    if (route === "collection" && pilotOn() && pilotWork()) {
+      setTimeout(() => route === "collection" && runPilot(), 1500);
     }
   }
 

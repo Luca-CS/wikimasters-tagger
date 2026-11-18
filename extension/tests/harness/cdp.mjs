@@ -160,12 +160,31 @@ try {
   const done = `__sim.count === 0 && !WMT.dom.reveal() && __sim.continues === 3`;
 
   out.visibility = await ev(`document.visibilityState`);
-  if (mode === "pilot") {
+  if (mode === "pilot" || mode === "pilotsell" || mode === "pilottagfail") pilotRun: {
     // Ton seul geste : activer le pilote dans le panneau (vrai clic). Puis tu passes sur un
     // autre onglet : celui du jeu est en arrière-plan pendant tout le reste.
     await until(`!!document.getElementById("wmt-host") && !!window.WMT_openButton && !!WMT_openButton()`, 15000);
     await sleep(800);
     out.visibleBefore = await ev(`document.visibilityState`);
+    if (mode !== "pilot") {
+      // Raretés à vendre choisies auparavant (panneau de la Collection), puis tes clics, avant d'allumer le pilote :
+      // « Puis vendre les cartes sans étiquette », et la confirmation.
+      await ev(`(async () => { const c = await WMT.store.getConfig(); c.settings.sellRarities = ${mode === "pilotsell" ? '["PC"]' : '["PC", "C"]'}; await WMT.store.saveConfig(c); return true; })()`);
+      // La config modifiée arrive au content script de façon asynchrone : on réessaie si le
+      // panneau répond encore « Choisis d'abord les raretés ».
+      const confirmShown = `[...document.getElementById("wmt-host").shadowRoot.querySelectorAll(".note button")].some((b) => b.textContent.includes("Oui, activer"))`;
+      out.sellTries = [];
+      for (let i = 0; i < 4; i++) {
+        await sleep(800);
+        await clickOn(`[...document.getElementById("wmt-host").shadowRoot.querySelectorAll("label.toggle")].find((l) => l.textContent.includes("Puis vendre")).querySelector("input")`);
+        if (await until(confirmShown, 3000)) break;
+        out.sellTries.push(await ev(`document.getElementById("wmt-host").shadowRoot.querySelector(".note").textContent`));
+      }
+      out.sellConfirmText = await ev(`document.getElementById("wmt-host").shadowRoot.querySelector(".note").textContent`);
+      await clickOn(`[...document.getElementById("wmt-host").shadowRoot.querySelectorAll(".note button")].find((b) => b.textContent.includes("Oui, activer"))`);
+      await sleep(500);
+      out.sellOn = await ev(`(() => { const s = JSON.parse(sessionStorage.getItem("__wmtStore") || "{}"); return s.config && s.config.settings.autoSellPulled; })()`);
+    }
     await clickOn(`[...document.getElementById("wmt-host").shadowRoot.querySelectorAll("label.toggle")].find((l) => l.textContent.includes("Pilote")).querySelector("input")`);
     const other = await http(`/json/new?${encodeURIComponent("about:blank")}`, "PUT");
     const front = await connect(other.webSocketDebuggerUrl);
@@ -177,14 +196,26 @@ try {
     })();
     const state = `JSON.parse(sessionStorage.getItem("__sim") || "{}")`;
     out.reachedCollection = await until(`location.pathname.startsWith("/collection")`, 90000);
+    if (mode === "pilottagfail") {
+      // Le contrôle doit arrêter le pilote sur la Collection, sans rien vendre.
+      out.pilotOff = await until(`(() => { const s = JSON.parse(sessionStorage.getItem("__wmtStore") || "{}"); return s.config && s.config.settings.autoOpen === false; })()`, 150000);
+      await sleep(3000);
+      out.sold = await ev(`JSON.parse(sessionStorage.getItem("__simSold") || "[]")`);
+      out.applied = await ev(`JSON.parse(sessionStorage.getItem("__simApplied") || "[]")`);
+      out.panel = await panel();
+      out.finalUrl = await ev(`location.href`);
+      break pilotRun;
+    }
     out.backToPulls = await until(`location.pathname.startsWith("/pulls") && !!sessionStorage.getItem("__simApplied")`, 120000);
     out.pendingOnReturn = await ev(`(() => { const s = JSON.parse(sessionStorage.getItem("__wmtStore") || "{}"); return s.pilot ? s.pilot.pending : null; })()`);
+    out.toSellOnReturn = await ev(`(() => { const s = JSON.parse(sessionStorage.getItem("__wmtStore") || "{}"); return s.pilot ? s.pilot.toSell || [] : null; })()`);
     out.thirdOpen = await until(`(${state}.opens || []).length >= 3`, 90000);
     await sleep(2000);
     out.pilotSim = await ev(`({ opens: ${state}.opens, regenerated: !!${state}.regenerated })`);
     out.applied = await ev(`JSON.parse(sessionStorage.getItem("__simApplied") || "[]")`);
     out.pulledSim = await ev(`JSON.parse(sessionStorage.getItem("__simPulled") || "[]").map((x) => x[0])`);
-    out.store = await ev(`(() => { const s = JSON.parse(sessionStorage.getItem("__wmtStore") || "{}"); return { autoOpen: s.config && s.config.settings.autoOpen, pending: s.pilot && s.pilot.pending }; })()`);
+    out.store = await ev(`(() => { const s = JSON.parse(sessionStorage.getItem("__wmtStore") || "{}"); return { autoOpen: s.config && s.config.settings.autoOpen, pending: s.pilot && s.pilot.pending, toSell: s.pilot && s.pilot.toSell }; })()`);
+    out.sold = await ev(`JSON.parse(sessionStorage.getItem("__simSold") || "[]")`);
     out.panel = await panel();
     out.finalUrl = await ev(`location.href`);
     out.sessionKeys = await ev(`Object.keys(sessionStorage)`);

@@ -98,12 +98,17 @@ def cdp(browser, url, mode, extra=(), size=DEFAULT_SIZE) -> dict:
                                  f"--user-data-dir={profile}", *extra, "about:blank"],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            res = subprocess.run(["node", str(HERE / "cdp.mjs"), str(port), url, mode],
-                                 capture_output=True, timeout=240, encoding="utf-8")
-            line = (res.stdout.strip().splitlines() or ["{}"])[-1]
-            return json.loads(line) if line.startswith("{") else {"error": res.stderr[-500:] or "pas de sortie"}
-        except subprocess.TimeoutExpired:
-            return {"error": "délai dépassé"}
+            # Popen + communicate : sous Windows, subprocess.run(timeout=…) pouvait rester bloqué
+            # des heures après le délai (lecture des tubes après le kill).
+            node = subprocess.Popen(["node", str(HERE / "cdp.mjs"), str(port), url, mode],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
+            try:
+                stdout, stderr = node.communicate(timeout=240)
+            except subprocess.TimeoutExpired:
+                node.kill()
+                return {"error": "délai dépassé"}
+            line = (stdout.strip().splitlines() or ["{}"])[-1]
+            return json.loads(line) if line.startswith("{") else {"error": stderr[-500:] or "pas de sortie"}
         finally:
             proc.kill()
             proc.wait(timeout=30)
@@ -233,6 +238,21 @@ SCENARIOS = [
         ("retour aux Paquets, file vidée", o.get("backToPulls") is True and o.get("pendingOnReturn") == []),
         ("paquet rechargé ouvert sans toi", o.get("thirdOpen") is True and (o.get("pilotSim") or {}).get("regenerated") is True),
         ("pilote toujours actif", (o.get("store") or {}).get("autoOpen") is True),
+    ]),
+    # Pilote avec vente : la carte tirée sans étiquette suggérée (PC) est vendue, rien d'autre.
+    ("pilot-sell", "cdp", "/pulls/?state=chain&pilot&pilotsell", "pilotsell", lambda o: [
+        ("vente activée par ton clic et ta confirmation", o.get("sellOn") is True and "Irréversible" in (o.get("sellConfirmText") or "")),
+        ("cartes tirées étiquetées", any(a.startswith("Limahl:Musique") for a in o.get("applied") or [])),
+        ("seule la carte sans étiquette suggérée est vendue", o.get("sold") == ["Planète double"]),
+        ("retour aux Paquets, files vidées", o.get("backToPulls") is True and o.get("pendingOnReturn") == []
+            and o.get("toSellOnReturn") == []),
+        ("pilote toujours actif", (o.get("store") or {}).get("autoOpen") is True),
+    ]),
+    # Contrôle : une carte étiquetée par le pilote que le jeu affiche sans étiquette arrête tout.
+    ("pilot-tagfail", "cdp", "/pulls/?state=chain&pilot&pilotsell&tagfail", "pilottagfail", lambda o: [
+        ("pilote arrêté", o.get("pilotOff") is True),
+        ("rien n'a été vendu", o.get("sold") == []),
+        ("arrêt expliqué (Limahl sans étiquette)", any("Limahl" in t and "sans étiquette" in t for t in o.get("panel") or [])),
     ]),
     ("service-worker", "selftest", None, "selftest", lambda o: [
         ("badge et alarme « plein » (gratuit : 24 min)", o.get("free", {}).get("badge") == "7"

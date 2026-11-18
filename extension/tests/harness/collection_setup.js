@@ -85,6 +85,8 @@
   const filters = { untagged: false, rarities: new Set() };
   window.__filters = filters;
   window.__sold = [];
+  // Pilote : paramètres du scénario (la Collection est ouverte sans paramètres par le pilote).
+  const pilotQuery = new URLSearchParams(sessionStorage.getItem("__simQuery") || "");
 
   // --- Pagination : [« ← Précédent », bouton « Page X / Y », « Suivant → »] ----------------
   const bars = [...document.querySelectorAll('main button[title="Aller à la page…"]')].map((b) => b.parentElement);
@@ -330,6 +332,8 @@
       for (const root of grid.children) {
         const t = titleOf(root);
         if (!selected.has(t) || tagsOf(root).includes(tag)) continue;
+        // &tagfail : le jeu annonce l'étiquette posée mais ne l'enregistre pas pour Limahl.
+        if (pilotRun && pilotQuery.has("tagfail") && t === "Limahl") continue;
         if (!added.has(t)) added.set(t, new Set());
         added.get(t).add(tag);
         n++;
@@ -468,6 +472,10 @@
       const titles = selection().discardable;
       for (const t of titles) inventory.splice(inventory.findIndex((it) => it.title === t), 1);
       window.__sold.push({ page, titles });
+      if (pilotRun) {
+        const prev = JSON.parse(sessionStorage.getItem("__simSold") || "[]");
+        sessionStorage.setItem("__simSold", JSON.stringify([...prev, ...titles]));
+      }
       d.remove();
       selected.clear();
       renderBar();
